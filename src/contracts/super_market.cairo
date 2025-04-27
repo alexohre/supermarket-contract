@@ -104,11 +104,8 @@ mod SuperMarket {
     }
 
     #[constructor]
-    fn constructor(
-        ref self: ContractState, owner: ContractAddress, payment_token: ContractAddress,
-    ) {
+    fn constructor(ref self: ContractState, owner: ContractAddress) {
         self.owner.write(owner);
-        self.payment_token.write(payment_token);
         self.admin_count.write(0);
         self.next_id.write(0);
         self.total_sales.write(0);
@@ -203,7 +200,7 @@ mod SuperMarket {
             let mut admins = ArrayTrait::new();
 
             let mut i: u32 = 0;
-            while i != count { // exit when i == count
+            while i != count + 1 { // exit when i == count
                 let admin = self.admin_addresses.read(i);
                 admins.append(admin);
                 i = i + 1_u32; // monotonic increment
@@ -225,7 +222,7 @@ mod SuperMarket {
             description: ByteArray,
             category: felt252,
             image: ByteArray,
-        ) {
+        ) -> u32 {
             // Only owner or admins can add products
             self.assert_only_admin_or_owner();
             // InternalFunctions::assert_only_admin_or_owner(@self);
@@ -234,7 +231,8 @@ mod SuperMarket {
             assert(!is_product_exists, 'Product already exists');
 
             // get the next id for auto increment
-            let id = self.next_id.read();
+            let id = self.get_prdct_id();
+
             let new_id = id + 1;
 
             // Store the descriptions so we can clone them for the event
@@ -265,6 +263,11 @@ mod SuperMarket {
                         },
                     ),
                 );
+            self.get_prdct_id()
+        }
+
+        fn get_prdct_id(self: @ContractState) -> u32 {
+            self.next_id.read()
         }
 
         // update product by id

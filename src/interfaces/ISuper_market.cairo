@@ -39,7 +39,7 @@ pub trait ISuperMarket<TContractState> {
         description: ByteArray,
         category: felt252,
         image: ByteArray,
-    );
+    ) -> u32;
 
     // update product by id
     fn update_product(
@@ -52,6 +52,8 @@ pub trait ISuperMarket<TContractState> {
         category: felt252,
         image: ByteArray,
     );
+
+    fn get_prdct_id(self: @TContractState) -> u32;
 
     // delete product by id
     fn delete_product(ref self: TContractState, id: u32);

@@ -41,6 +41,7 @@ src/
 ├── interfaces/
 │   └── ISuper_market.cairo    # Contract interface
 └── lib.cairo    # Library entry point
+tests/
 ```
 
 ## Key Components
@@ -102,6 +103,10 @@ Run the tests using:
 ```bash
 scarb test
 ```
+
+## Deployment
+
+For detailed deployment instructions, see the [Deployment Guide](DEPLOYMENT.md).
 
 ## Security Features
 
