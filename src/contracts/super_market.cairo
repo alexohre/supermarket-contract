@@ -3,6 +3,7 @@
 
 const PAUSER_ROLE: felt252 = selector!("PAUSER_ROLE");
 const UPGRADER_ROLE: felt252 = selector!("UPGRADER_ROLE");
+const ADMIN_ROLE: felt252 = selector!("ADMIN_ROLE");
 
 // Define the token address as a constant felt252
 const STARKNET_TOKEN_ADDRESS: felt252 =
@@ -36,7 +37,7 @@ mod SuperMarketV1 {
     };
     // import interfaces
     use super_market::interfaces::ISuper_market::ISuperMarket;
-    use super::{PAUSER_ROLE, STARKNET_TOKEN_ADDRESS, UPGRADER_ROLE};
+    use super::{ADMIN_ROLE, PAUSER_ROLE, STARKNET_TOKEN_ADDRESS, UPGRADER_ROLE};
 
     component!(path: PausableComponent, storage: pausable, event: PausableEvent);
     component!(path: AccessControlComponent, storage: accesscontrol, event: AccessControlEvent);
@@ -105,9 +106,11 @@ mod SuperMarketV1 {
     fn constructor(ref self: ContractState, default_admin: ContractAddress) {
         self.accesscontrol.initializer();
 
+        // Grant the owner all the admin roles
         self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, default_admin);
         self.accesscontrol._grant_role(PAUSER_ROLE, default_admin);
         self.accesscontrol._grant_role(UPGRADER_ROLE, default_admin);
+        self.accesscontrol._grant_role(ADMIN_ROLE, default_admin);
 
         // Initialize marketplace state
         self.owner.write(default_admin);
@@ -119,19 +122,11 @@ mod SuperMarketV1 {
     // Internal implementation for contract functions
     #[generate_trait]
     impl InternalFunctions of InternalFunctionsTrait {
-        //Modifiers
-        fn assert_only_owner(self: @ContractState) {
-            let caller = get_caller_address();
-            let owner = self.owner.read();
-            assert(caller == owner, 'Only owner allowed');
-        }
-
-        fn assert_only_admin_or_owner(self: @ContractState) {
-            let caller = get_caller_address();
-            let owner = self.owner.read();
-            let is_admin = self.admins.read(caller);
-
-            assert(caller == owner || is_admin, 'Only owner or admin allowed');
+        // Helper function to check if caller has admin role or default admin role
+        fn assert_has_admin_role(self: @ContractState, caller: ContractAddress) {
+            let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_admin_role || has_default_admin_role, 'Not authorized');
         }
     }
 
@@ -140,13 +135,19 @@ mod SuperMarketV1 {
     impl ExternalImpl of ExternalTrait {
         #[external(v0)]
         fn pause(ref self: ContractState) {
-            self.accesscontrol.assert_only_role(PAUSER_ROLE);
+            // Only owner can pause - use has_role instead of assert_only_role
+            let caller = get_caller_address();
+            let has_pauser_role = self.accesscontrol.has_role(PAUSER_ROLE, caller);
+            assert(has_pauser_role, 'Caller is not a pauser');
             self.pausable.pause();
         }
 
         #[external(v0)]
         fn unpause(ref self: ContractState) {
-            self.accesscontrol.assert_only_role(PAUSER_ROLE);
+            // Only owner can unpause - use has_role instead of assert_only_role
+            let caller = get_caller_address();
+            let has_pauser_role = self.accesscontrol.has_role(PAUSER_ROLE, caller);
+            assert(has_pauser_role, 'Caller is not a pauser');
             self.pausable.unpause();
         }
     }
@@ -158,7 +159,10 @@ mod SuperMarketV1 {
     #[abi(embed_v0)]
     impl UpgradeableImpl of IUpgradeable<ContractState> {
         fn upgrade(ref self: ContractState, new_class_hash: ClassHash) {
-            self.accesscontrol.assert_only_role(UPGRADER_ROLE);
+            // Use has_role instead of assert_only_role
+            let caller = get_caller_address();
+            let has_upgrader_role = self.accesscontrol.has_role(UPGRADER_ROLE, caller);
+            assert(has_upgrader_role, 'Caller is not an upgrader');
             self.upgradeable.upgrade(new_class_hash);
         }
     }
@@ -168,8 +172,24 @@ mod SuperMarketV1 {
     impl SuperMarketImpl of ISuperMarket<ContractState> {
         // Owner management functions
         fn transfer_ownership(ref self: ContractState, new_owner: ContractAddress) {
-            self.assert_only_owner();
+            // Use OpenZeppelin's has_role instead of custom modifier
+            let caller = get_caller_address();
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_default_admin_role, 'Caller is not the admin');
+
             let previous_owner = self.owner.read();
+
+            // Transfer all admin roles to the new owner
+            self.accesscontrol._revoke_role(DEFAULT_ADMIN_ROLE, previous_owner);
+            self.accesscontrol._revoke_role(PAUSER_ROLE, previous_owner);
+            self.accesscontrol._revoke_role(UPGRADER_ROLE, previous_owner);
+            self.accesscontrol._revoke_role(ADMIN_ROLE, previous_owner);
+
+            self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, new_owner);
+            self.accesscontrol._grant_role(PAUSER_ROLE, new_owner);
+            self.accesscontrol._grant_role(UPGRADER_ROLE, new_owner);
+            self.accesscontrol._grant_role(ADMIN_ROLE, new_owner);
+
             self.owner.write(new_owner);
 
             self
@@ -179,7 +199,10 @@ mod SuperMarketV1 {
         }
 
         fn add_admin(ref self: ContractState, admin: ContractAddress) {
-            self.assert_only_owner();
+            // Use OpenZeppelin's has_role instead of custom modifier
+            let caller = get_caller_address();
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_default_admin_role, 'Caller is not the admin');
 
             // Check if already an admin
             let is_already_admin = self.admins.read(admin);
@@ -192,12 +215,19 @@ mod SuperMarketV1 {
                 self.admin_addresses.write(current_count, admin);
                 self.admin_count.write(current_count + 1);
 
+                // Grant ADMIN_ROLE to the new admin
+                self.accesscontrol._grant_role(ADMIN_ROLE, admin);
+
                 self.emit(Event::AdminAdded(AdminAdded { admin }));
             }
         }
 
         fn remove_admin(ref self: ContractState, admin: ContractAddress) {
-            self.assert_only_owner();
+            // Use OpenZeppelin's has_role instead of custom modifier
+            let caller = get_caller_address();
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_default_admin_role, 'Caller is not the admin');
+
             let is_admin = self.admins.read(admin);
 
             if is_admin {
@@ -232,6 +262,9 @@ mod SuperMarketV1 {
                     }
                     self.admin_count.write(last_index);
                 }
+
+                // Revoke ADMIN_ROLE from the admin
+                self.accesscontrol._revoke_role(ADMIN_ROLE, admin);
 
                 self.emit(Event::AdminRemoved(AdminRemoved { admin }));
             }
@@ -273,8 +306,11 @@ mod SuperMarketV1 {
             category: felt252,
             image: ByteArray,
         ) -> u32 {
-            // Only owner or admins can add products
-            self.assert_only_admin_or_owner();
+            // Check if caller has ADMIN_ROLE or DEFAULT_ADMIN_ROLE
+            let caller = get_caller_address();
+            let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_admin_role || has_default_admin_role, 'Not authorized');
 
             // Check if the product already exists
             let is_product_exists = self.product_names.read(name);
@@ -331,8 +367,11 @@ mod SuperMarketV1 {
             category: felt252,
             image: ByteArray,
         ) {
-            // Only owner or admins can update products
-            self.assert_only_admin_or_owner();
+            // Check if caller has ADMIN_ROLE or DEFAULT_ADMIN_ROLE
+            let caller = get_caller_address();
+            let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_admin_role || has_default_admin_role, 'Not authorized');
 
             // Check if the product exists
             let mut product = self.products.read(id);
@@ -383,8 +422,11 @@ mod SuperMarketV1 {
 
         // delete product
         fn delete_product(ref self: ContractState, id: u32) {
-            // Only owner or admins can delete products
-            self.assert_only_admin_or_owner();
+            // Check if caller has ADMIN_ROLE or DEFAULT_ADMIN_ROLE
+            let caller = get_caller_address();
+            let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_admin_role || has_default_admin_role, 'Not authorized');
 
             // Check if the product exists
             let product = self.products.read(id);
@@ -527,7 +569,10 @@ mod SuperMarketV1 {
         }
 
         fn withdraw_funds(ref self: ContractState, amount: u256) {
-            self.assert_only_owner();
+            // Only owner can withdraw funds - use OpenZeppelin's has_role
+            let caller = get_caller_address();
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_default_admin_role, 'Caller is not the admin');
 
             // Build a dispatcher to the STRK (ERC‑20) contract
             let payment_token_address: felt252 = STARKNET_TOKEN_ADDRESS;
@@ -570,8 +615,11 @@ mod SuperMarketV1 {
 
         // New function to get all orders (admin only)
         fn get_all_orders(self: @ContractState) -> Array<Order> {
-            // Only owner or admins can view all orders
-            self.assert_only_admin_or_owner();
+            // Check if caller has ADMIN_ROLE or DEFAULT_ADMIN_ROLE
+            let caller = get_caller_address();
+            let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_admin_role || has_default_admin_role, 'Not authorized');
 
             let order_count = self.order_count.read();
             let mut orders = ArrayTrait::new();
