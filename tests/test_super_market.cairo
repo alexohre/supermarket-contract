@@ -9,7 +9,7 @@ use super_market::interfaces::ISuper_market::{ISuperMarketDispatcher, ISuperMark
 
 fn setup() -> (ContractAddress, ContractAddress) {
     let owner = contract_address_const::<'owner'>();
-    let contract_class = declare("SuperMarket").unwrap().contract_class();
+    let contract_class = declare("SuperMarketV1").unwrap().contract_class();
     let (contract_address, _) = contract_class.deploy(@array![owner.into()]).unwrap();
     (contract_address, owner)
 }

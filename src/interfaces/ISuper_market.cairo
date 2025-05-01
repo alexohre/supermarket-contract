@@ -1,6 +1,5 @@
 use starknet::ContractAddress;
-use super_market::contracts::super_market::{Order, OrderItem, Product, PurchaseItem};
-
+use super_market::Structs::Structs::{Order, OrderItem, Product, PurchaseItem};
 
 #[starknet::interface]
 pub trait ISuperMarket<TContractState> {

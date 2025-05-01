@@ -1,60 +1,71 @@
-use starknet::{ContractAddress, get_block_timestamp, get_contract_address};
+// SPDX-License-Identifier: MIT
+// Compatible with OpenZeppelin Contracts for Cairo ^1.0.0
 
-// product struct
-#[derive(Clone, Debug, Drop, PartialEq, Serde, starknet::Store)]
-pub struct Product {
-    pub id: u32,
-    pub name: felt252,
-    pub price: u32,
-    pub stock: u32,
-    pub description: ByteArray,
-    pub category: felt252,
-    pub image: ByteArray,
-}
+const PAUSER_ROLE: felt252 = selector!("PAUSER_ROLE");
+const UPGRADER_ROLE: felt252 = selector!("UPGRADER_ROLE");
 
-// Define a purchase item structure to handle multiple products
-#[derive(Clone, Debug, Drop, PartialEq, Serde, Copy)]
-pub struct PurchaseItem {
-    pub product_id: u32,
-    pub quantity: u32,
-}
-
-
-// Add an Order structure to store purchase history
-#[derive(Clone, Debug, Drop, PartialEq, Serde, starknet::Store)]
-pub struct Order {
-    pub id: u32,
-    pub buyer: ContractAddress,
-    pub total_cost: u32,
-    pub timestamp: u64,
-    pub items_count: u32,
-}
-
-// Define a structure to store order items
-#[derive(Clone, Debug, Drop, PartialEq, Serde, starknet::Store)]
-pub struct OrderItem {
-    pub product_id: u32,
-    pub quantity: u32,
-    pub price: u32,
-}
+// Define the token address as a constant felt252
+const STARKNET_TOKEN_ADDRESS: felt252 =
+    0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d;
+// starknet token address
 
 #[starknet::contract]
-mod SuperMarket {
+mod SuperMarketV1 {
+    // Import conversion traits
+    use core::traits::{Into, TryInto};
+    use openzeppelin::access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
+    use openzeppelin::introspection::src5::SRC5Component;
+    use openzeppelin::security::pausable::PausableComponent;
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
-    use starknet::get_caller_address;
+    use openzeppelin::upgrades::UpgradeableComponent;
+    use openzeppelin::upgrades::interface::IUpgradeable;
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
     };
+    use starknet::{
+        ClassHash, ContractAddress, get_block_timestamp, get_caller_address, get_contract_address,
+    };
+
+    // Import structs
+    use super_market::Structs::Structs::{Order, OrderItem, Product, PurchaseItem};
+    // import events
     use super_market::events::super_market_event::{
         AdminAdded, AdminRemoved, OwnershipTransferred, ProductCreated, ProductDeleted,
         ProductPurchased, ProductUpdated,
     };
+    // import interfaces
     use super_market::interfaces::ISuper_market::ISuperMarket;
-    use super::*;
+    use super::{PAUSER_ROLE, STARKNET_TOKEN_ADDRESS, UPGRADER_ROLE};
+
+    component!(path: PausableComponent, storage: pausable, event: PausableEvent);
+    component!(path: AccessControlComponent, storage: accesscontrol, event: AccessControlEvent);
+    component!(path: SRC5Component, storage: src5, event: SRC5Event);
+    component!(path: UpgradeableComponent, storage: upgradeable, event: UpgradeableEvent);
+
+    // External
+    #[abi(embed_v0)]
+    impl PausableImpl = PausableComponent::PausableImpl<ContractState>;
+    #[abi(embed_v0)]
+    impl AccessControlMixinImpl =
+        AccessControlComponent::AccessControlMixinImpl<ContractState>;
+
+    // Internal
+    impl PausableInternalImpl = PausableComponent::InternalImpl<ContractState>;
+    impl AccessControlInternalImpl = AccessControlComponent::InternalImpl<ContractState>;
+    impl UpgradeableInternalImpl = UpgradeableComponent::InternalImpl<ContractState>;
 
     #[storage]
     struct Storage {
+        #[substorage(v0)]
+        pausable: PausableComponent::Storage,
+        #[substorage(v0)]
+        accesscontrol: AccessControlComponent::Storage,
+        #[substorage(v0)]
+        src5: SRC5Component::Storage,
+        #[substorage(v0)]
+        upgradeable: UpgradeableComponent::Storage,
+        // Add storage from original contract
         owner: ContractAddress, // Store owner address
         admins: Map<ContractAddress, bool>, // Store admin addresses
         admin_addresses: Map<u32, ContractAddress>, // Store admin addresses by index
@@ -63,18 +74,24 @@ mod SuperMarket {
         next_id: u32, // Next product id
         total_sales: u32, // Total sales amount
         product_names: Map<felt252, bool>, // Store product names to prevent duplicates
-        // stark contract address for payments
-        payment_token: ContractAddress, // Address of the ERC20 token used for payments
         // Order management
         orders: Map<u32, Order>, // Store orders by id
         order_items: Map<(u32, u32), OrderItem>, // Store order items by (order_id, item_index)
         order_count: u32 // Track number of orders
     }
 
-
     #[event]
-    #[derive(Debug, Clone, Drop, starknet::Event)]
-    pub enum Event {
+    #[derive(Drop, starknet::Event)]
+    enum Event {
+        #[flat]
+        PausableEvent: PausableComponent::Event,
+        #[flat]
+        AccessControlEvent: AccessControlComponent::Event,
+        #[flat]
+        SRC5Event: SRC5Component::Event,
+        #[flat]
+        UpgradeableEvent: UpgradeableComponent::Event,
+        // Add events from original contract
         ProductCreated: ProductCreated,
         ProductUpdated: ProductUpdated,
         ProductDeleted: ProductDeleted,
@@ -82,6 +99,21 @@ mod SuperMarket {
         AdminAdded: AdminAdded,
         AdminRemoved: AdminRemoved,
         OwnershipTransferred: OwnershipTransferred,
+    }
+
+    #[constructor]
+    fn constructor(ref self: ContractState, default_admin: ContractAddress) {
+        self.accesscontrol.initializer();
+
+        self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, default_admin);
+        self.accesscontrol._grant_role(PAUSER_ROLE, default_admin);
+        self.accesscontrol._grant_role(UPGRADER_ROLE, default_admin);
+
+        // Initialize marketplace state
+        self.owner.write(default_admin);
+        self.admin_count.write(0);
+        self.next_id.write(0);
+        self.total_sales.write(0);
     }
 
     // Internal implementation for contract functions
@@ -103,19 +135,38 @@ mod SuperMarket {
         }
     }
 
-    #[constructor]
-    fn constructor(ref self: ContractState, owner: ContractAddress) {
-        self.owner.write(owner);
-        self.admin_count.write(0);
-        self.next_id.write(0);
-        self.total_sales.write(0);
+    #[generate_trait]
+    #[abi(per_item)]
+    impl ExternalImpl of ExternalTrait {
+        #[external(v0)]
+        fn pause(ref self: ContractState) {
+            self.accesscontrol.assert_only_role(PAUSER_ROLE);
+            self.pausable.pause();
+        }
+
+        #[external(v0)]
+        fn unpause(ref self: ContractState) {
+            self.accesscontrol.assert_only_role(PAUSER_ROLE);
+            self.pausable.unpause();
+        }
     }
 
+    //
+    // Upgradeable
+    //
 
+    #[abi(embed_v0)]
+    impl UpgradeableImpl of IUpgradeable<ContractState> {
+        fn upgrade(ref self: ContractState, new_class_hash: ClassHash) {
+            self.accesscontrol.assert_only_role(UPGRADER_ROLE);
+            self.upgradeable.upgrade(new_class_hash);
+        }
+    }
+
+    // Implement the ISuperMarket interface
     #[abi(embed_v0)]
     impl SuperMarketImpl of ISuperMarket<ContractState> {
         // Owner management functions
-
         fn transfer_ownership(ref self: ContractState, new_owner: ContractAddress) {
             self.assert_only_owner();
             let previous_owner = self.owner.read();
@@ -194,13 +245,12 @@ mod SuperMarket {
             self.owner.read()
         }
 
-
         fn get_admins(self: @ContractState) -> Array<ContractAddress> {
             let count = self.admin_count.read();
             let mut admins = ArrayTrait::new();
 
             let mut i: u32 = 0;
-            while i != count + 1 { // exit when i == count
+            while i != count { // exit when i == count
                 let admin = self.admin_addresses.read(i);
                 admins.append(admin);
                 i = i + 1_u32; // monotonic increment
@@ -212,8 +262,8 @@ mod SuperMarket {
         fn get_admin_count(self: @ContractState) -> u32 {
             self.admin_count.read()
         }
-        // Product management functions
 
+        // Product management functions
         fn add_product(
             ref self: ContractState,
             name: felt252,
@@ -225,7 +275,7 @@ mod SuperMarket {
         ) -> u32 {
             // Only owner or admins can add products
             self.assert_only_admin_or_owner();
-            // InternalFunctions::assert_only_admin_or_owner(@self);
+
             // Check if the product already exists
             let is_product_exists = self.product_names.read(name);
             assert(!is_product_exists, 'Product already exists');
@@ -379,17 +429,18 @@ mod SuperMarket {
             self.total_sales.read()
         }
 
-
         // Purchase product
         // Buy multiple products at once
         fn buy_product(ref self: ContractState, purchases: Array<PurchaseItem>) -> u32 {
+            // Check if contract is paused
+            self.pausable.assert_not_paused();
+
             let buyer = get_caller_address();
             let mut total_cost: u32 = 0;
             let mut i: u32 = 0;
             let purchases_len = purchases.len();
 
             // Verify product existence, stock, and calculate total cost WITHOUT modifying storage
-
             while i != purchases_len {
                 let purchase = *purchases.at(i);
                 let product_id = purchase.product_id;
@@ -411,14 +462,15 @@ mod SuperMarket {
             }
 
             // Now handle payment
-            let payment_token_address = self.payment_token.read();
+            let payment_token_address: felt252 = STARKNET_TOKEN_ADDRESS;
             let contract_address = starknet::get_contract_address();
 
             // Convert u32 to u256 for the ERC20 interface
             let total_cost_u256: u256 = total_cost.into();
 
             // Create a dispatcher to interact with the token contract
-            let token_dispatcher = IERC20Dispatcher { contract_address: payment_token_address };
+            let token_contract_address: ContractAddress = payment_token_address.try_into().unwrap();
+            let token_dispatcher = IERC20Dispatcher { contract_address: token_contract_address };
 
             // Check if buyer has enough balance
             let buyer_balance = token_dispatcher.balance_of(buyer);
@@ -474,15 +526,15 @@ mod SuperMarket {
             total_cost
         }
 
-
         fn withdraw_funds(ref self: ContractState, amount: u256) {
             self.assert_only_owner();
 
             // Build a dispatcher to the STRK (ERC‑20) contract
-            let token_addr: ContractAddress = self.payment_token.read();
+            let payment_token_address: felt252 = STARKNET_TOKEN_ADDRESS;
+            let token_addr: ContractAddress = payment_token_address.try_into().unwrap();
             let erc20 = IERC20Dispatcher { contract_address: token_addr };
 
-            // Check this contract’s token balance
+            // Check this contract's token balance
             let this_contract: ContractAddress = get_contract_address();
             let balance: u256 = erc20.balance_of(this_contract);
             assert(balance >= amount, 'INSUFFICIENT_STRK_BALANCE');
@@ -491,7 +543,6 @@ mod SuperMarket {
             let owner: ContractAddress = self.owner.read();
             erc20.transfer(owner, amount);
         }
-
 
         // Get order items for a specific order
         fn get_order_items(self: @ContractState, order_id: u32) -> Array<OrderItem> {
@@ -516,7 +567,6 @@ mod SuperMarket {
 
             items
         }
-
 
         // New function to get all orders (admin only)
         fn get_all_orders(self: @ContractState) -> Array<Order> {
