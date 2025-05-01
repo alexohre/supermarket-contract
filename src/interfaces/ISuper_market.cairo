@@ -28,6 +28,10 @@ pub trait ISuperMarket<TContractState> {
     // withdraw funds
     fn withdraw_funds(ref self: TContractState, amount: u256);
 
+    // Pausable functions
+    fn pause_contract(ref self: TContractState);
+    fn unpause_contract(ref self: TContractState);
+    fn contract_is_paused(self: @TContractState) -> bool;
 
     // add product
     fn add_product(

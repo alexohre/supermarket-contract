@@ -11,7 +11,7 @@ const STARKNET_TOKEN_ADDRESS: felt252 =
 // starknet token address
 
 #[starknet::contract]
-mod SuperMarketV1 {
+pub mod SuperMarketV1 {
     // Import conversion traits
     use core::traits::{Into, TryInto};
     use openzeppelin::access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
@@ -20,6 +20,7 @@ mod SuperMarketV1 {
     use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
     use openzeppelin::upgrades::UpgradeableComponent;
     use openzeppelin::upgrades::interface::IUpgradeable;
+    use starknet::event::EventEmitter;
     use starknet::storage::{
         Map, StorageMapReadAccess, StorageMapWriteAccess, StoragePointerReadAccess,
         StoragePointerWriteAccess,
@@ -38,6 +39,7 @@ mod SuperMarketV1 {
     // import interfaces
     use super_market::interfaces::ISuper_market::ISuperMarket;
     use super::{ADMIN_ROLE, PAUSER_ROLE, STARKNET_TOKEN_ADDRESS, UPGRADER_ROLE};
+    use super::*;
 
     component!(path: PausableComponent, storage: pausable, event: PausableEvent);
     component!(path: AccessControlComponent, storage: accesscontrol, event: AccessControlEvent);
@@ -83,7 +85,7 @@ mod SuperMarketV1 {
 
     #[event]
     #[derive(Drop, starknet::Event)]
-    enum Event {
+    pub enum Event {
         #[flat]
         PausableEvent: PausableComponent::Event,
         #[flat]
@@ -120,13 +122,28 @@ mod SuperMarketV1 {
     }
 
     // Internal implementation for contract functions
-    #[generate_trait]
+    trait InternalFunctionsTrait {
+        fn assert_has_admin_role(self: @ContractState, caller: ContractAddress);
+        fn _pause(ref self: ContractState);
+        fn _unpause(ref self: ContractState);
+    }
+
     impl InternalFunctions of InternalFunctionsTrait {
         // Helper function to check if caller has admin role or default admin role
         fn assert_has_admin_role(self: @ContractState, caller: ContractAddress) {
             let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
             let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
             assert(has_admin_role || has_default_admin_role, 'Not authorized');
+        }
+
+        // Internal function to pause the contract
+        fn _pause(ref self: ContractState) {
+            self.pausable.pause();
+        }
+
+        // Internal function to unpause the contract
+        fn _unpause(ref self: ContractState) {
+            self.pausable.unpause();
         }
     }
 
@@ -198,6 +215,32 @@ mod SuperMarketV1 {
                 );
         }
 
+        // Pausable functions
+        fn pause_contract(ref self: ContractState) {
+            // Only DEFAULT_ADMIN_ROLE can pause the contract
+            let caller = get_caller_address();
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_default_admin_role, 'Caller is not the admin');
+            
+            // Call the internal pause function
+            self.pausable.pause();
+        }
+
+        fn unpause_contract(ref self: ContractState) {
+            // Only DEFAULT_ADMIN_ROLE can unpause the contract
+            let caller = get_caller_address();
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_default_admin_role, 'Caller is not the admin');
+            
+            // Call the internal unpause function
+            self.pausable.unpause();
+        }
+
+        fn contract_is_paused(self: @ContractState) -> bool {
+            self.pausable.is_paused()
+        }
+
+        // Admin management functions
         fn add_admin(ref self: ContractState, admin: ContractAddress) {
             // Use OpenZeppelin's has_role instead of custom modifier
             let caller = get_caller_address();
@@ -306,6 +349,9 @@ mod SuperMarketV1 {
             category: felt252,
             image: ByteArray,
         ) -> u32 {
+            // Check if contract is paused
+            self.pausable.assert_not_paused();
+
             // Check if caller has ADMIN_ROLE or DEFAULT_ADMIN_ROLE
             let caller = get_caller_address();
             let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
@@ -367,6 +413,9 @@ mod SuperMarketV1 {
             category: felt252,
             image: ByteArray,
         ) {
+            // Check if contract is paused
+            self.pausable.assert_not_paused();
+
             // Check if caller has ADMIN_ROLE or DEFAULT_ADMIN_ROLE
             let caller = get_caller_address();
             let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
@@ -422,6 +471,9 @@ mod SuperMarketV1 {
 
         // delete product
         fn delete_product(ref self: ContractState, id: u32) {
+            // Check if contract is paused
+            self.pausable.assert_not_paused();
+
             // Check if caller has ADMIN_ROLE or DEFAULT_ADMIN_ROLE
             let caller = get_caller_address();
             let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
@@ -569,6 +621,9 @@ mod SuperMarketV1 {
         }
 
         fn withdraw_funds(ref self: ContractState, amount: u256) {
+            // Check if contract is paused
+            self.pausable.assert_not_paused();
+
             // Only owner can withdraw funds - use OpenZeppelin's has_role
             let caller = get_caller_address();
             let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
