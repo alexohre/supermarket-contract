@@ -983,3 +983,180 @@ fn test_add_admin_after_unpause() {
     
     stop_cheat_caller_address(contract_instance.contract_address);
 }
+
+
+// ******* Test Remove Admin *******
+// Test remove admin with default admin role (owner)
+#[test]
+fn test_remove_admin_with_default_admin() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add an admin
+    let admin_felt: felt252 = 0002.into();
+    let admin: ContractAddress = admin_felt.try_into().unwrap();
+
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add admins
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+
+    // Add admin
+    contract_instance.add_admin(admin);
+    
+    // Verify admin was added
+    assert(contract_instance.is_admin(admin), 'Admin not added by owner');
+    
+    // Remove admin
+    contract_instance.remove_admin(admin);
+    
+    // Verify admin was removed
+    assert(!contract_instance.is_admin(admin), 'Admin not removed by owner');
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+
+// Test remove admin with admin role
+#[test]
+#[should_panic(expected: 'Caller is not the admin')]
+fn test_remove_admin_with_admin_role() {
+    let (contract_address, _, admin) = setup_with_admin();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a new admin to be added
+    let new_admin_felt: felt252 = 023456789.into();
+    let new_admin: ContractAddress = new_admin_felt.try_into().unwrap();
+
+    // Admin has ADMIN_ROLE and should be able to add admins
+    start_cheat_caller_address(contract_instance.contract_address, admin);
+
+    // Add admin
+    contract_instance.add_admin(new_admin);
+    
+    // Verify admin was added
+    assert(contract_instance.is_admin(new_admin), 'Admin not added by admin');
+    
+    // Remove admin
+    contract_instance.remove_admin(new_admin);
+    
+    // Verify admin was removed
+    assert(!contract_instance.is_admin(new_admin), 'Admin not removed by admin');
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// Test remove admin with random address (should panic)
+#[test]
+#[should_panic(expected: 'Caller is not the admin')]
+fn test_remove_admin_with_random_address() {
+    let (contract_address, _) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a random address that doesn't have any roles
+    let random_felt: felt252 = 333333.into();
+    let random_user: ContractAddress = random_felt.try_into().unwrap();
+
+    // Random user tries to remove admin
+    start_cheat_caller_address(contract_instance.contract_address, random_user);
+    
+    // This should panic with the message 'Not authorized'
+    contract_instance.remove_admin(random_user);
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+    
+
+// Test remove admin events
+#[test]
+fn test_remove_admin_emit_event() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add an admin
+    let admin_felt: felt252 = 0002.into();
+    let admin: ContractAddress = admin_felt.try_into().unwrap();
+
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add admins
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+
+    // Add admin
+    contract_instance.add_admin(admin);
+    
+    // Verify admin was added
+    assert(contract_instance.is_admin(admin), 'Admin not added by owner');
+    
+    // Start spying on events before removing admin
+    let mut spy = spy_events();
+    
+    // Remove admin
+    contract_instance.remove_admin(admin);
+    
+    // Verify admin was removed
+    assert(!contract_instance.is_admin(admin), 'Admin not removed by owner');
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Get the emitted events
+    let events = spy.get_events();
+    assert(events.events.len() > 0, 'No events were emitted');
+    
+    // Verify the event came from our contract
+    let events_from_contract = events.emitted_by(contract_address);
+    assert(events_from_contract.events.len() > 0, 'No events from contract');
+    
+    // Check that the event has the correct key (event name)
+    let (_, event) = events_from_contract.events.at(0);
+    println!("Event keys: {}", event.keys.len());
+    println!("Event data: {}", event.data.len());
+    
+    // Print the actual event name
+    let event_name = *event.keys.at(0);
+    println!("Event name: {}", event_name);
+    
+    // Print all possible selectors for comparison
+    println!("AdminRemoved selector: {}", selector!("AdminRemoved"));
+    println!("RoleRevoked selector: {}", selector!("RoleRevoked"));
+    
+    // Check for either AdminRemoved or RoleRevoked event
+    let is_admin_removed = event_name == selector!("AdminRemoved");
+    let is_role_revoked = event_name == selector!("RoleRevoked");
+    
+    assert(is_admin_removed || is_role_revoked, 'Expected admin event');
+    
+    // If it's an AdminRemoved event, check the admin address
+    if is_admin_removed {
+        assert(event.data.len() > 0, 'Event has no data');
+        assert(*event.data.at(0) == admin.into(), 'Admin address should be admin');
+    }
+}
+
+// Test remove admin when paused
+#[test]
+#[should_panic(expected: 'Pausable: paused')]
+fn test_remove_admin_when_paused() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add an admin
+    let admin_felt: felt252 = 0002.into();
+    let admin: ContractAddress = admin_felt.try_into().unwrap();
+
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add admins
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+
+    // Add admin
+    contract_instance.add_admin(admin);
+    
+    // Verify admin was added
+    assert(contract_instance.is_admin(admin), 'Admin not added by owner');
+    
+    // Pause the contract
+    contract_instance.pause_contract();
+    
+    // Remove admin
+    contract_instance.remove_admin(admin);
+    
+    // Verify admin was removed
+    assert(!contract_instance.is_admin(admin), 'Admin not removed by owner');
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
