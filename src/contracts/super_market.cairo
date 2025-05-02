@@ -518,6 +518,17 @@ pub mod SuperMarketV1 {
             products
         }
 
+        fn get_product_by_id(self: @ContractState, id: u32) -> Product {
+            // Check if the product exists - IDs start at 1
+            assert(id > 0 && id <= self.next_id.read(), 'Product not found');
+            
+            // Retrieve the product from storage
+            let product = self.products.read(id);
+            
+            // Return the product
+            product
+        }
+
         // Get total sales
         fn get_total_sales(self: @ContractState) -> u32 {
             self.total_sales.read()

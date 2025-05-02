@@ -1,9 +1,13 @@
 use snforge_std::{
     ContractClassTrait, DeclareResultTrait, declare, spy_events,
     start_cheat_caller_address, stop_cheat_caller_address,
+    EventSpyTrait, EventSpyAssertionsTrait, Event, IsEmitted,
+    EventsFilterTrait
 };
 use starknet::{ContractAddress, contract_address_const};
 use super_market::interfaces::ISuper_market::{ISuperMarketDispatcher, ISuperMarketDispatcherTrait};
+use super_market::events::super_market_event::{ProductCreated, ProductUpdated, AdminAdded};
+
 // Constants for roles
 const ADMIN_ROLE: felt252 = selector!("ADMIN_ROLE");
 const PAUSER_ROLE: felt252 = selector!("PAUSER_ROLE");
@@ -33,7 +37,7 @@ fn setup_with_admin() -> (ContractAddress, ContractAddress, ContractAddress) {
 }
 
 // ========= PRODUCT TEST SUITES =========
-// ******* Product Tests *******
+// ******* Test Add Product *******
 // Test add product with default admin role (owner)
 #[test]
 fn test_add_product_with_default_admin() {
@@ -130,11 +134,8 @@ fn test_add_product_emit_event() {
     let category: felt252 = 'fruit';
     let image: ByteArray = "zgxcnwxvvwqbdvcandvaffcfcffff";
 
-    // Clone the ByteArrays before they're moved
-    let _description_clone = description.clone();
-    let _image_clone = image.clone();
 
-    let _spy = spy_events();
+    let mut spy = spy_events();
     // Owner has DEFAULT_ADMIN_ROLE and should be able to add products
     start_cheat_caller_address(contract_instance.contract_address, owner);
 
@@ -149,9 +150,23 @@ fn test_add_product_emit_event() {
 
     stop_cheat_caller_address(contract_instance.contract_address);
 
-    // For now, we'll skip the event testing part since we're having issues with the API
-    // The main goal is to verify that the product was added successfully, which we've done
-    // We can revisit event testing once we have a better understanding of the API
+    // Get all events and verify an event was emitted
+    let events = spy.get_events();
+    assert(events.events.len() > 0, 'No events were emitted');
+    
+    // Verify the event came from our contract
+    let events_from_contract = events.emitted_by(contract_address);
+    assert(events_from_contract.events.len() > 0, 'No events from contract');
+    
+    // Check that the event has the correct key (event name)
+    let (_, event) = events_from_contract.events.at(0);
+    assert(event.keys.len() > 0, 'Event has no keys');
+    assert(event.keys.at(0) == @selector!("ProductCreated"), 'Wrong event name');
+    
+    // Check that the event data contains the correct product ID
+    assert(event.data.len() > 0, 'Event has no data');
+    // Event data is stored as felt252, so we need to convert our u32 to felt252 for comparison
+    assert(event.data.at(0) == @1.into(), 'Product ID should be 1');
 }
 
 // Test pausable functionality
@@ -200,9 +215,9 @@ fn test_add_product_after_unpause() {
     let name: felt252 = 'Pineapple';
     let price: u32 = 3;
     let stock: u32 = 8;
-    let description: ByteArray = "Fresh pineapples";
+    let description = "Fresh pineapples";
     let category: felt252 = 'fruit';
-    let image: ByteArray = "pineappleimage";
+    let image = "pineappleimage";
 
     // Verify initial state
     assert(contract_instance.get_prdct_id() == 0, 'Initial ID should be 0');
@@ -213,5 +228,330 @@ fn test_add_product_after_unpause() {
     // Verify product was added
     assert(contract_instance.get_prdct_id() == 1, 'Product not added after unpause');
 
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+
+// ******* Test update product *******
+
+// Test update product with default admin role (owner)
+#[test]
+fn test_update_product_with_default_admin() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add a product
+    let name: felt252 = 'Apple';
+    let price: u32 = 1;
+    let stock: u32 = 10;
+    let description: ByteArray = "Fresh red apples from local farm";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "appleimage";
+
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+
+    // Add product
+    contract_instance.add_product(name, price, stock, description, category, image);
+    
+    // Verify product was added
+    assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
+    
+    // Now update the product
+    let updated_name: felt252 = 'Green Apple';
+    let updated_price: u32 = 2;
+    let updated_stock: u32 = 15;
+    let updated_description: ByteArray = "Fresh green apples from local farm";
+    let updated_category: felt252 = 'fruit';
+    let updated_image: ByteArray = "greenappleimage";
+    
+    // Update the product
+    contract_instance.update_product(
+        1, // product ID
+        updated_name,
+        updated_price,
+        updated_stock,
+        updated_description.clone(),
+        updated_category,
+        updated_image.clone()
+    );
+    
+    // Verify the product data was updated using get_product_by_id
+    let product = contract_instance.get_product_by_id(1);
+    assert(product.name == updated_name, 'Name not updated');
+    assert(product.price == updated_price, 'Price not updated');
+    assert(product.stock == updated_stock, 'Stock not updated');
+    assert(product.description.len() == updated_description.len(), 'Description length mismatch');
+    assert(product.category == updated_category, 'Category not updated');
+    assert(product.image.len() == updated_image.len(), 'Image length mismatch');
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// Test update product with admin role
+#[test]
+fn test_update_product_with_admin_role() {
+    // Setup contract with owner and admin
+    let (contract_address, _, admin) = setup_with_admin();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add a product as admin
+    let name: felt252 = 'Banana';
+    let price: u32 = 2;
+    let stock: u32 = 20;
+    let description: ByteArray = "Yellow bananas";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "bananaimage";
+
+    // Admin has ADMIN_ROLE and should be able to add products
+    start_cheat_caller_address(contract_instance.contract_address, admin);
+
+    // Add product
+    contract_instance.add_product(name, price, stock, description, category, image);
+    
+    // Verify product was added
+    assert(contract_instance.get_prdct_id() == 1, 'Product not added by admin');
+    
+    // Now update the product
+    let updated_name: felt252 = 'Ripe Banana';
+    let updated_price: u32 = 3;
+    let updated_stock: u32 = 25;
+    let updated_description: ByteArray = "Ripe yellow bananas";
+    let updated_category: felt252 = 'fruit';
+    let updated_image: ByteArray = "ripebananaimage";
+    
+    // Update the product
+    contract_instance.update_product(
+        1, // product ID
+        updated_name,
+        updated_price,
+        updated_stock,
+        updated_description.clone(),
+        updated_category,
+        updated_image.clone()
+    );
+    
+    // Verify the product data was updated using get_product_by_id
+    let product = contract_instance.get_product_by_id(1);
+    assert(product.name == updated_name, 'Name not updated');
+    assert(product.price == updated_price, 'Price not updated');
+    assert(product.stock == updated_stock, 'Stock not updated');
+    assert(product.description.len() == updated_description.len(), 'Description length mismatch');
+    assert(product.category == updated_category, 'Category not updated');
+    assert(product.image.len() == updated_image.len(), 'Image length mismatch');
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// Test update product with random address (should panic)
+#[test]
+#[should_panic(expected: 'Not authorized')]
+fn test_update_product_with_random_address() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add a product as owner
+    let name: felt252 = 'Orange';
+    let price: u32 = 3;
+    let stock: u32 = 15;
+    let description: ByteArray = "Juicy oranges";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "orangeimage";
+
+    // Owner adds the product
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_product(name, price, stock, description, category, image);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Create a random address that doesn't have any roles
+    let random_user = contract_address_const::<'john'>();
+
+    // Random user tries to update the product
+    start_cheat_caller_address(contract_instance.contract_address, random_user);
+    
+    // This should panic with the message 'Not authorized'
+    contract_instance.update_product(
+        1, // product ID
+        'Better Orange',
+        4,
+        20,
+        "Better juicy oranges".clone(),
+        'fruit',
+        "betterorangeimage".clone()
+    );
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// Test update product events
+#[test]
+fn test_update_product_emit_event() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add a product
+    let name: felt252 = 'Grape';
+    let price: u32 = 4;
+    let stock: u32 = 30;
+    let description: ByteArray = "Purple grapes";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "grapeimage";
+
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+
+    // Add product
+    contract_instance.add_product(name, price, stock, description, category, image);
+    
+    // Verify product was added
+    assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
+    
+    // Now update the product
+    let updated_name: felt252 = 'Green Grape';
+    let updated_price: u32 = 5;
+    let updated_stock: u32 = 35;
+    let updated_description: ByteArray = "Green grapes";
+    let updated_category: felt252 = 'fruit';
+    let updated_image: ByteArray = "greengrapeimage";
+    
+    let mut spy = spy_events();
+    
+    // Update the product
+    contract_instance.update_product(
+        1, // product ID
+        updated_name,
+        updated_price,
+        updated_stock,
+        updated_description.clone(),
+        updated_category,
+        updated_image.clone()
+    );
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Get all events and verify an event was emitted
+    let events = spy.get_events();
+    assert(events.events.len() > 0, 'No events were emitted');
+    
+    // Verify the event came from our contract
+    let events_from_contract = events.emitted_by(contract_address);
+    assert(events_from_contract.events.len() > 0, 'No events from contract');
+    
+    // Check that the event has the correct key (event name)
+    let (_, event) = events_from_contract.events.at(0);
+    assert(event.keys.len() > 0, 'Event has no keys');
+    assert(event.keys.at(0) == @selector!("ProductUpdated"), 'Wrong event name');
+    
+    // Check that the event data contains the correct product ID
+    assert(event.data.len() > 0, 'Event has no data');
+    assert(event.data.at(0) == @1.into(), 'Product ID should be 1');
+}
+
+// Test update product when paused
+#[test]
+#[should_panic(expected: 'Pausable: paused')]
+fn test_update_product_when_paused() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add a product
+    let name: felt252 = 'Strawberry';
+    let price: u32 = 5;
+    let stock: u32 = 25;
+    let description: ByteArray = "Fresh strawberries";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "strawberryimage";
+
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products and pause the contract
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+
+    // Add product
+    contract_instance.add_product(name, price, stock, description, category, image);
+    
+    // Verify product was added
+    assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
+    
+    // Pause the contract
+    contract_instance.pause_contract();
+    
+    // Try to update the product while the contract is paused
+    let updated_name: felt252 = 'Red Strawberry';
+    let updated_price: u32 = 6;
+    let updated_stock: u32 = 30;
+    let updated_description: ByteArray = "Fresh red strawberries";
+    let updated_category: felt252 = 'fruit';
+    let updated_image: ByteArray = "redstrawberryimage";
+    
+    // This should panic with "Pausable: paused"
+    contract_instance.update_product(
+        1, // product ID
+        updated_name,
+        updated_price,
+        updated_stock,
+        updated_description.clone(),
+        updated_category,
+        updated_image.clone()
+    );
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// Test update product after unpause
+#[test]
+fn test_update_product_after_unpause() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add a product
+    let name: felt252 = 'Blueberry';
+    let price: u32 = 7;
+    let stock: u32 = 40;
+    let description: ByteArray = "Fresh blueberries";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "blueberryimage";
+
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products and pause/unpause the contract
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+
+    // Add product
+    contract_instance.add_product(name, price, stock, description, category, image);
+    
+    // Verify product was added
+    assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
+    
+    // Pause the contract
+    contract_instance.pause_contract();
+    
+    // Unpause the contract
+    contract_instance.unpause_contract();
+    
+    // Update the product after unpausing
+    let updated_name: felt252 = 'Organic Blueberry';
+    let updated_price: u32 = 8;
+    let updated_stock: u32 = 45;
+    let updated_description: ByteArray = "Fresh organic blueberries";
+    let updated_category: felt252 = 'fruit';
+    let updated_image: ByteArray = "organicblueberryimage";
+    
+    // This should succeed now that the contract is unpaused
+    contract_instance.update_product(
+        1, // product ID
+        updated_name,
+        updated_price,
+        updated_stock,
+        updated_description.clone(),
+        updated_category,
+        updated_image.clone()
+    );
+    
+    // Verify the product data was updated using get_product_by_id
+    let product = contract_instance.get_product_by_id(1);
+    assert(product.name == updated_name, 'Name not updated');
+    assert(product.price == updated_price, 'Price not updated');
+    assert(product.stock == updated_stock, 'Stock not updated');
+    assert(product.description.len() == updated_description.len(), 'Description length mismatch');
+    assert(product.category == updated_category, 'Category not updated');
+    assert(product.image.len() == updated_image.len(), 'Image length mismatch');
+    
     stop_cheat_caller_address(contract_instance.contract_address);
 }

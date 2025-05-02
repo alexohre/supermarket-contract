@@ -64,6 +64,9 @@ pub trait ISuperMarket<TContractState> {
     // get products
     fn get_products(self: @TContractState) -> Array<Product>;
 
+    // get product by id
+    fn get_product_by_id(self: @TContractState, id: u32) -> Product;
+
     // get total sales
     fn get_total_sales(self: @TContractState) -> u32;
 
