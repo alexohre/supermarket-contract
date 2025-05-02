@@ -4,7 +4,8 @@ use snforge_std::{
     EventSpyTrait,
     EventsFilterTrait
 };
-use starknet::{ContractAddress, contract_address_const};
+use starknet::{ContractAddress};
+use core::traits::TryInto;
 use super_market::interfaces::ISuper_market::{ISuperMarketDispatcher, ISuperMarketDispatcherTrait};
 
 // Constants for roles
@@ -14,7 +15,10 @@ const UPGRADER_ROLE: felt252 = selector!("UPGRADER_ROLE");
 
 // Setup function that returns contract address and owner address
 fn setup() -> (ContractAddress, ContractAddress) {
-    let owner = contract_address_const::<'owner'>();
+    // Create owner address using TryInto
+    let owner_felt: felt252 = 0001.into();
+    let owner: ContractAddress = owner_felt.try_into().unwrap();
+    
     let contract_class = declare("SuperMarketV1").unwrap().contract_class();
     // Deploy with only the owner address as the default_admin parameter
     let (contract_address, _) = contract_class.deploy(@array![owner.into()]).unwrap();
@@ -24,7 +28,10 @@ fn setup() -> (ContractAddress, ContractAddress) {
 // Setup function that also adds an admin
 fn setup_with_admin() -> (ContractAddress, ContractAddress, ContractAddress) {
     let (contract_address, owner) = setup();
-    let admin = contract_address_const::<'admin'>();
+    
+    // Create admin address using TryInto
+    let admin_felt: felt252 = 0002.into();
+    let admin: ContractAddress = admin_felt.try_into().unwrap();
 
     // Add admin
     let contract_instance = ISuperMarketDispatcher { contract_address };
@@ -102,11 +109,12 @@ fn test_add_product_with_random_address() {
     let contract_instance = ISuperMarketDispatcher { contract_address };
 
     // Create a random address that doesn't have any roles
-    let random_user = contract_address_const::<'john'>();
+    let random_felt: felt252 = 333333.into();
+    let random_user: ContractAddress = random_felt.try_into().unwrap();
 
     let name: felt252 = 'Orange';
     let price: u32 = 3;
-    let stock: u32 = 15;
+    let stock: u32 = 30;
     let description: ByteArray = "Juicy oranges";
     let category: felt252 = 'fruit';
     let image: ByteArray = "orangeimage";
@@ -363,7 +371,8 @@ fn test_update_product_with_random_address() {
     stop_cheat_caller_address(contract_instance.contract_address);
 
     // Create a random address that doesn't have any roles
-    let random_user = contract_address_const::<'john'>();
+    let random_felt: felt252 = 333333.into();
+    let random_user: ContractAddress = random_felt.try_into().unwrap();
 
     // Random user tries to update the product
     start_cheat_caller_address(contract_instance.contract_address, random_user);
@@ -643,7 +652,8 @@ fn test_delete_product_with_random_address() {
     let contract_instance = ISuperMarketDispatcher { contract_address };
 
     // Create a random address that doesn't have any roles
-    let random_user = contract_address_const::<'john'>();
+    let random_felt: felt252 = 333333.into();
+    let random_user: ContractAddress = random_felt.try_into().unwrap();
 
     // First add a product as owner
     let name: felt252 = 'Pear';
@@ -802,7 +812,8 @@ fn test_add_admin_with_default_admin() {
     let contract_instance = ISuperMarketDispatcher { contract_address };
 
     // First add an admin
-    let admin = contract_address_const::<'admin'>();
+    let admin_felt: felt252 = 0002.into();
+    let admin: ContractAddress = admin_felt.try_into().unwrap();
 
     // Owner has DEFAULT_ADMIN_ROLE and should be able to add admins
     start_cheat_caller_address(contract_instance.contract_address, owner);
@@ -824,7 +835,8 @@ fn test_add_admin_with_admin_role() {
     let contract_instance = ISuperMarketDispatcher { contract_address };
 
     // Create a new admin to be added
-    let new_admin = contract_address_const::<'new_admin'>();
+    let new_admin_felt: felt252 = 023456789.into();
+    let new_admin: ContractAddress = new_admin_felt.try_into().unwrap();
 
     // Admin has ADMIN_ROLE and should be able to add admins
     start_cheat_caller_address(contract_instance.contract_address, admin);
@@ -846,7 +858,8 @@ fn test_add_admin_with_random_address() {
     let contract_instance = ISuperMarketDispatcher { contract_address };
 
     // Create a random address that doesn't have any roles
-    let random_user = contract_address_const::<'john'>();
+    let random_felt: felt252 = 333333.into();
+    let random_user: ContractAddress = random_felt.try_into().unwrap();
 
     // Random user has no roles and should not be able to add admins
     start_cheat_caller_address(contract_instance.contract_address, random_user);
@@ -864,7 +877,8 @@ fn test_add_admin_emit_event() {
     let contract_instance = ISuperMarketDispatcher { contract_address };
 
     // First add an admin
-    let admin = contract_address_const::<'admin'>();
+    let admin_felt: felt252 = 0002.into();
+    let admin: ContractAddress = admin_felt.try_into().unwrap();
 
     // Start spying on events before adding admin
     let mut spy = spy_events();
@@ -924,7 +938,8 @@ fn test_add_admin_when_paused() {
     let contract_instance = ISuperMarketDispatcher { contract_address };
 
     // First add an admin
-    let admin = contract_address_const::<'admin'>();
+    let admin_felt: felt252 = 0002.into();
+    let admin: ContractAddress = admin_felt.try_into().unwrap();
 
     // Owner has DEFAULT_ADMIN_ROLE and should be able to add admins
     start_cheat_caller_address(contract_instance.contract_address, owner);
@@ -948,7 +963,8 @@ fn test_add_admin_after_unpause() {
     let contract_instance = ISuperMarketDispatcher { contract_address };
 
     // First add an admin
-    let admin = contract_address_const::<'admin'>();
+    let admin_felt: felt252 = 0002.into();
+    let admin: ContractAddress = admin_felt.try_into().unwrap();
 
     // Owner has DEFAULT_ADMIN_ROLE and should be able to add admins
     start_cheat_caller_address(contract_instance.contract_address, owner);
