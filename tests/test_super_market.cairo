@@ -555,3 +555,224 @@ fn test_update_product_after_unpause() {
     
     stop_cheat_caller_address(contract_instance.contract_address);
 }
+
+
+
+// ******* Test delete product *******
+
+// Test delete product with default admin role (owner)
+#[test]
+fn test_delete_product_with_default_admin() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add a product
+    let name: felt252 = 'Cherry';
+    let price: u32 = 6;
+    let stock: u32 = 50;
+    let description: ByteArray = "Sweet cherries";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "cherryimage";
+
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+
+    // Add product
+    contract_instance.add_product(name, price, stock, description, category, image);
+    
+    // Verify product was added
+    assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
+    
+    // Now delete the product
+    contract_instance.delete_product(1);
+    
+    // Verify the product was deleted by checking that it has id = 0
+    let product = contract_instance.get_product_by_id(1);
+    assert(product.id == 0, 'Product not deleted');
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// Test delete product with admin role
+#[test]
+fn test_delete_product_with_admin_role() {
+    // Setup contract with owner and admin
+    let (contract_address, _, admin) = setup_with_admin();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add a product as admin
+    let name: felt252 = 'Peach';
+    let price: u32 = 4;
+    let stock: u32 = 30;
+    let description: ByteArray = "Juicy peaches";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "peachimage";
+
+    // Admin has ADMIN_ROLE and should be able to add products
+    start_cheat_caller_address(contract_instance.contract_address, admin);
+
+    // Add product
+    contract_instance.add_product(name, price, stock, description, category, image);
+    
+    // Verify product was added
+    assert(contract_instance.get_prdct_id() == 1, 'Product not added by admin');
+    
+    // Now delete the product
+    contract_instance.delete_product(1);
+    
+    // Verify the product was deleted by checking that it has id = 0
+    let product = contract_instance.get_product_by_id(1);
+    assert(product.id == 0, 'Product not deleted');
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// Test delete product with random address (should panic)
+#[test]
+#[should_panic(expected: 'Not authorized')]
+fn test_delete_product_with_random_address() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a random address that doesn't have any roles
+    let random_user = contract_address_const::<'john'>();
+
+    // First add a product as owner
+    let name: felt252 = 'Pear';
+    let price: u32 = 3;
+    let stock: u32 = 25;
+    let description: ByteArray = "Fresh pears";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "pearimage";
+
+    // Owner adds the product
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_product(name, price, stock, description, category, image);
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Random user tries to delete the product
+    start_cheat_caller_address(contract_instance.contract_address, random_user);
+    
+    // This should panic with the message 'Not authorized'
+    contract_instance.delete_product(1);
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// Test delete product events
+#[test]
+fn test_delete_product_emit_event() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add a product
+    let name: felt252 = 'Kiwi';
+    let price: u32 = 5;
+    let stock: u32 = 40;
+    let description: ByteArray = "Green kiwis";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "kiwiimage";
+
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+
+    // Add product
+    contract_instance.add_product(name, price, stock, description, category, image);
+    
+    let mut spy = spy_events();
+    
+    // Delete the product
+    contract_instance.delete_product(1);
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Get the emitted events
+    let events = spy.get_events();
+    assert(events.events.len() > 0, 'No events were emitted');
+    
+    // Verify the event came from our contract
+    let events_from_contract = events.emitted_by(contract_address);
+    assert(events_from_contract.events.len() > 0, 'No events from contract');
+    
+    // Check that the event has the correct key (event name)
+    let (_, event) = events_from_contract.events.at(0);
+    assert(event.keys.len() > 0, 'Event has no keys');
+    assert(event.keys.at(0) == @selector!("ProductDeleted"), 'Wrong event name');
+    
+    // Check that the event data contains the correct product ID
+    assert(event.data.len() > 0, 'Event has no data');
+    assert(event.data.at(0) == @1.into(), 'Product ID should be 1');
+}
+
+// Test delete product when paused
+#[test]
+#[should_panic(expected: 'Pausable: paused')]
+fn test_delete_product_when_paused() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add a product
+    let name: felt252 = 'Plum';
+    let price: u32 = 4;
+    let stock: u32 = 35;
+    let description: ByteArray = "Purple plums";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "plumimage";
+
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products and pause the contract
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+
+    // Add product
+    contract_instance.add_product(name, price, stock, description, category, image);
+    
+    // Verify product was added
+    assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
+    
+    // Pause the contract
+    contract_instance.pause_contract();
+    
+    // Try to delete the product while the contract is paused
+    // This should panic with "Pausable: paused"
+    contract_instance.delete_product(1);
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// Test delete product after unpause
+#[test]
+fn test_delete_product_after_unpause() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // First add a product
+    let name: felt252 = 'Apricot';
+    let price: u32 = 5;
+    let stock: u32 = 45;
+    let description: ByteArray = "Fresh apricots";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "apricotimage";
+
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products and pause/unpause the contract
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+
+    // Add product
+    contract_instance.add_product(name, price, stock, description, category, image);
+    
+    // Verify product was added
+    assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
+    
+    // Pause the contract
+    contract_instance.pause_contract();
+    
+    // Unpause the contract
+    contract_instance.unpause_contract();
+    
+    // Delete the product after unpausing
+    contract_instance.delete_product(1);
+    
+    // Verify the product was deleted by checking that it has id = 0
+    let product = contract_instance.get_product_by_id(1);
+    assert(product.id == 0, 'Product not deleted');
+    
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
