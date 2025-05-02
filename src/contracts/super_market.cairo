@@ -242,6 +242,9 @@ pub mod SuperMarketV1 {
 
         // Admin management functions
         fn add_admin(ref self: ContractState, admin: ContractAddress) {
+            // Check if contract is paused
+            self.pausable.assert_not_paused();
+
             // Use OpenZeppelin's has_role instead of custom modifier
             let caller = get_caller_address();
             let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
@@ -266,6 +269,9 @@ pub mod SuperMarketV1 {
         }
 
         fn remove_admin(ref self: ContractState, admin: ContractAddress) {
+            // Check if contract is paused
+            self.pausable.assert_not_paused();
+
             // Use OpenZeppelin's has_role instead of custom modifier
             let caller = get_caller_address();
             let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
