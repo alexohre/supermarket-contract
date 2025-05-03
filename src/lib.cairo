@@ -11,6 +11,7 @@ pub mod Structs {
 // import contracts
 pub mod contracts {
     pub mod super_market;
+    pub mod MockToken;
 }
 
 // import events
@@ -23,4 +24,3 @@ pub mod events {
 pub mod tests {
     pub mod test_super_market;
 }
-

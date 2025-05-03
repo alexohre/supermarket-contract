@@ -9,7 +9,6 @@ const ADMIN_ROLE: felt252 = selector!("ADMIN_ROLE");
 const STARKNET_TOKEN_ADDRESS: felt252 =
     0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d;
 // starknet token address
-
 #[starknet::contract]
 pub mod SuperMarketV1 {
     // Import conversion traits
@@ -38,7 +37,7 @@ pub mod SuperMarketV1 {
     };
     // import interfaces
     use super_market::interfaces::ISuper_market::ISuperMarket;
-    use super::{ADMIN_ROLE, PAUSER_ROLE, STARKNET_TOKEN_ADDRESS, UPGRADER_ROLE};
+    use super::{ADMIN_ROLE, PAUSER_ROLE, UPGRADER_ROLE};
     use super::*;
 
     component!(path: PausableComponent, storage: pausable, event: PausableEvent);
@@ -80,7 +79,8 @@ pub mod SuperMarketV1 {
         // Order management
         orders: Map<u32, Order>, // Store orders by id
         order_items: Map<(u32, u32), OrderItem>, // Store order items by (order_id, item_index)
-        order_count: u32 // Track number of orders
+        order_count: u32, // Track number of orders
+        payment_token_address: ContractAddress // Store the payment token address
     }
 
     #[event]
@@ -105,7 +105,11 @@ pub mod SuperMarketV1 {
     }
 
     #[constructor]
-    fn constructor(ref self: ContractState, default_admin: ContractAddress) {
+    fn constructor(
+        ref self: ContractState, 
+        default_admin: ContractAddress, 
+        token_address: ContractAddress
+    ) {
         self.accesscontrol.initializer();
 
         // Grant the owner all the admin roles
@@ -119,11 +123,15 @@ pub mod SuperMarketV1 {
         self.admin_count.write(0);
         self.next_id.write(0);
         self.total_sales.write(0);
+        
+        // Set the payment token address
+        self.payment_token_address.write(token_address);
     }
 
     // Internal implementation for contract functions
     trait InternalFunctionsTrait {
         fn assert_has_admin_role(self: @ContractState, caller: ContractAddress);
+        fn is_owner_or_admin(self: @ContractState, address: ContractAddress) -> bool;
         fn _pause(ref self: ContractState);
         fn _unpause(ref self: ContractState);
     }
@@ -134,6 +142,18 @@ pub mod SuperMarketV1 {
             let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
             let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
             assert(has_admin_role || has_default_admin_role, 'Not authorized');
+        }
+
+        // Function to check if an address is owner or admin
+        fn is_owner_or_admin(self: @ContractState, address: ContractAddress) -> bool {
+            // Check if address is the owner (has DEFAULT_ADMIN_ROLE)
+            let is_owner = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, address);
+            
+            // Check if address has ADMIN_ROLE
+            let is_admin = self.accesscontrol.has_role(ADMIN_ROLE, address);
+            
+            // Return true if either condition is met
+            is_owner || is_admin
         }
 
         // Internal function to pause the contract
@@ -573,15 +593,14 @@ pub mod SuperMarketV1 {
             }
 
             // Now handle payment
-            let payment_token_address: felt252 = STARKNET_TOKEN_ADDRESS;
+            let payment_token_address = self.payment_token_address.read();
             let contract_address = starknet::get_contract_address();
 
             // Convert u32 to u256 for the ERC20 interface
             let total_cost_u256: u256 = total_cost.into();
 
             // Create a dispatcher to interact with the token contract
-            let token_contract_address: ContractAddress = payment_token_address.try_into().unwrap();
-            let token_dispatcher = IERC20Dispatcher { contract_address: token_contract_address };
+            let token_dispatcher = IERC20Dispatcher { contract_address: payment_token_address };
 
             // Check if buyer has enough balance
             let buyer_balance = token_dispatcher.balance_of(buyer);
@@ -646,9 +665,9 @@ pub mod SuperMarketV1 {
             let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
             assert(has_default_admin_role, 'Caller is not the admin');
 
-            // Build a dispatcher to the STRK (ERC‑20) contract
-            let payment_token_address: felt252 = STARKNET_TOKEN_ADDRESS;
-            let token_addr: ContractAddress = payment_token_address.try_into().unwrap();
+            // Build a dispatcher to the token contract
+            let payment_token_address = self.payment_token_address.read();
+            let token_addr: ContractAddress = payment_token_address;
             let erc20 = IERC20Dispatcher { contract_address: token_addr };
 
             // Check this contract's token balance
@@ -656,7 +675,7 @@ pub mod SuperMarketV1 {
             let balance: u256 = erc20.balance_of(this_contract);
             assert(balance >= amount, 'INSUFFICIENT_STRK_BALANCE');
 
-            // Transfer STRK to the owner
+            // Transfer tokens to the owner
             let owner: ContractAddress = self.owner.read();
             erc20.transfer(owner, amount);
         }

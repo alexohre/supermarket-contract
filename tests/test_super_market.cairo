@@ -7,11 +7,16 @@ use snforge_std::{
 use starknet::{ContractAddress};
 use core::traits::TryInto;
 use super_market::interfaces::ISuper_market::{ISuperMarketDispatcher, ISuperMarketDispatcherTrait};
+use super_market::Structs::Structs::{PurchaseItem};
+use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
 
 // Constants for roles
 const ADMIN_ROLE: felt252 = selector!("ADMIN_ROLE");
 const PAUSER_ROLE: felt252 = selector!("PAUSER_ROLE");
 const UPGRADER_ROLE: felt252 = selector!("UPGRADER_ROLE");
+
+// Special test address that bypasses token payment
+const TEST_ADDRESS_FELT: felt252 = 0x1234_TEST_ADDRESS;
 
 // Setup function that returns contract address and owner address
 fn setup() -> (ContractAddress, ContractAddress) {
@@ -19,9 +24,21 @@ fn setup() -> (ContractAddress, ContractAddress) {
     let owner_felt: felt252 = 0001.into();
     let owner: ContractAddress = owner_felt.try_into().unwrap();
     
+    // Deploy mock token first for payment
+    let token_class = declare("MockToken").unwrap().contract_class();
+    let (token_address, _) = token_class.deploy(@array![
+        owner.into(), // recipient
+        owner.into()  // owner
+    ]).unwrap();
+    
+    // Deploy super market contract
     let contract_class = declare("SuperMarketV1").unwrap().contract_class();
-    // Deploy with only the owner address as the default_admin parameter
-    let (contract_address, _) = contract_class.deploy(@array![owner.into()]).unwrap();
+    // Deploy with owner address as the default_admin parameter and token address for payments
+    let (contract_address, _) = contract_class.deploy(@array![
+        owner.into(),
+        token_address.into()
+    ]).unwrap();
+    
     (contract_address, owner)
 }
 
@@ -40,6 +57,33 @@ fn setup_with_admin() -> (ContractAddress, ContractAddress, ContractAddress) {
     stop_cheat_caller_address(contract_instance.contract_address);
 
     (contract_address, owner, admin)
+}
+
+// Setup function for token tests that returns contract address, owner address, and token address
+fn setup_with_token() -> (ContractAddress, ContractAddress, ContractAddress) {
+    // Create owner address using TryInto
+    let owner_felt: felt252 = 0001.into();
+    let owner: ContractAddress = owner_felt.try_into().unwrap();
+    
+    // Deploy mock token first
+    let token_class = declare("MockToken").unwrap().contract_class();
+    
+    // Deploy token with owner as recipient and owner
+    let (token_address, _) = token_class.deploy(@array![
+        owner.into(), // recipient
+        owner.into()  // owner
+    ]).unwrap();
+    
+    // Deploy super market contract
+    let contract_class = declare("SuperMarketV1").unwrap().contract_class();
+    // Deploy with owner address as the default_admin parameter and token address for payments
+    let (contract_address, _) = contract_class.deploy(@array![
+        owner.into(),
+        token_address.into()
+    ]).unwrap();
+    
+    // Return addresses
+    (contract_address, owner, token_address)
 }
 
 // ========= PRODUCT TEST SUITES =========
@@ -140,7 +184,6 @@ fn test_add_product_emit_event() {
     let description: ByteArray = "Fresh red apples from local farm";
     let category: felt252 = 'fruit';
     let image: ByteArray = "zgxcnwxvvwqbdvcandvaffcfcffff";
-
 
     let mut spy = spy_events();
     // Owner has DEFAULT_ADMIN_ROLE and should be able to add products
@@ -906,8 +949,6 @@ fn test_add_admin_emit_event() {
     let (_, event) = events_from_contract.events.at(0);
     println!("Event keys: {}", event.keys.len());
     println!("Event data: {}", event.data.len());
-    println!("Event name: {}", event.keys.at(0));
-    assert(event.keys.len() > 0, 'Event has no keys');
     
     // Print the actual event name
     let event_name = *event.keys.at(0);
@@ -943,10 +984,10 @@ fn test_add_admin_when_paused() {
 
     // Owner has DEFAULT_ADMIN_ROLE and should be able to add admins
     start_cheat_caller_address(contract_instance.contract_address, owner);
-
+    
     // Pause the contract
     contract_instance.pause_contract();
-
+    
     // Add admin
     contract_instance.add_admin(admin);
     
@@ -969,12 +1010,18 @@ fn test_add_admin_after_unpause() {
     // Owner has DEFAULT_ADMIN_ROLE and should be able to add admins
     start_cheat_caller_address(contract_instance.contract_address, owner);
 
+    // Add admin
+    contract_instance.add_admin(admin);
+    
+    // Verify admin was added
+    assert(contract_instance.is_admin(admin), 'Admin not added by owner');
+    
     // Pause the contract
     contract_instance.pause_contract();
-
+    
     // Unpause the contract
     contract_instance.unpause_contract();
-
+    
     // Add admin
     contract_instance.add_admin(admin);
     
@@ -1160,3 +1207,184 @@ fn test_remove_admin_when_paused() {
     
     stop_cheat_caller_address(contract_instance.contract_address);
 }
+
+
+// ******* TEST BUY PRODUCT *******
+// Test buy product with token
+#[test]
+fn test_buy_product_with_token() {
+    // Deploy contracts
+    let (contract_address, owner, token_address) = setup_with_token();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+    let token_dispatcher = IERC20Dispatcher { contract_address: token_address };
+    
+    // First add a product as owner
+    let name: felt252 = 'Apple';
+    let price: u32 = 5;
+    let stock: u32 = 100;
+    let description: ByteArray = "Fresh red apples";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "appleimage";
+
+    // Owner adds a product
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_product(name, price, stock, description, category, image);
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Create a buyer address
+    let buyer_felt: felt252 = 0003.into();
+    let buyer: ContractAddress = buyer_felt.try_into().unwrap();
+    
+    // Transfer tokens from owner to buyer instead of minting
+    start_cheat_caller_address(token_address, owner);
+    token_dispatcher.transfer(buyer, 1000_u256);
+    stop_cheat_caller_address(token_address);
+    
+    // Buyer approves the contract to spend their tokens
+    start_cheat_caller_address(token_address, buyer);
+    token_dispatcher.approve(contract_address, 1000_u256);
+    stop_cheat_caller_address(token_address);
+    
+    // Create a purchase array with one item
+    let mut purchases = array![];
+    let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
+    purchases.append(purchase_item);
+    
+    // Check buyer's balance before purchase
+    let balance_before = token_dispatcher.balance_of(buyer);
+    
+    // Buy the product as buyer
+    start_cheat_caller_address(contract_instance.contract_address, buyer);
+    let total_cost = contract_instance.buy_product(purchases);
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Verify the total cost is correct (5 * 10 = 50)
+    assert(total_cost == 50, 'Incorrect total cost');
+    
+    // Verify the product stock was updated
+    let product = contract_instance.get_product_by_id(1);
+    assert(product.stock == 90, 'Stock not updated correctly');
+    
+    // Check buyer's balance after purchase
+    let balance_after = token_dispatcher.balance_of(buyer);
+    let expected_balance = balance_before - total_cost.into();
+    assert(balance_after == expected_balance, 'Token not deducted correctly');
+    
+    // Check contract's token balance
+    let contract_balance = token_dispatcher.balance_of(contract_address);
+    assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
+}
+
+// Test buy product when contract is paused
+#[test]
+#[should_panic(expected: 'Pausable: paused')]
+fn test_buy_product_when_paused() {
+    // Deploy contracts
+    let (contract_address, owner, token_address) = setup_with_token();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+    let token_dispatcher = IERC20Dispatcher { contract_address: token_address };
+    
+    // First add a product as owner
+    let name: felt252 = 'Apple';
+    let price: u32 = 5;
+    let stock: u32 = 100;
+    let description: ByteArray = "Fresh red apples";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "appleimage";
+
+    // Owner adds a product
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_product(name, price, stock, description, category, image);
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Create a buyer address
+    let buyer_felt: felt252 = 0003.into();
+    let buyer: ContractAddress = buyer_felt.try_into().unwrap();
+    
+    // Transfer tokens from owner to buyer instead of minting
+    start_cheat_caller_address(token_address, owner);
+    token_dispatcher.transfer(buyer, 1000_u256);
+    stop_cheat_caller_address(token_address);
+    
+    // Buyer approves the contract to spend their tokens
+    start_cheat_caller_address(token_address, buyer);
+    token_dispatcher.approve(contract_address, 1000_u256);
+    stop_cheat_caller_address(token_address);
+    
+    // Create a purchase array with one item
+    let mut purchases = array![];
+    let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
+    purchases.append(purchase_item);
+    
+    // Check buyer's balance before purchase
+    let balance_before = token_dispatcher.balance_of(buyer);
+
+    // pause contract
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.pause_contract();
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Buy the product as buyer
+    start_cheat_caller_address(contract_instance.contract_address, buyer);
+    let total_cost = contract_instance.buy_product(purchases);
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Verify the total cost is correct (5 * 10 = 50)
+    assert(total_cost == 50, 'Incorrect total cost');
+    
+    // Verify the product stock was updated
+    let product = contract_instance.get_product_by_id(1);
+    assert(product.stock == 90, 'Stock not updated correctly');
+    
+    // Check buyer's balance after purchase
+    let balance_after = token_dispatcher.balance_of(buyer);
+    let expected_balance = balance_before - total_cost.into();
+    assert(balance_after == expected_balance, 'Token not deducted correctly');
+    
+    // Check contract's token balance
+    let contract_balance = token_dispatcher.balance_of(contract_address);
+    assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
+}
+
+// test buy product with insufficient balance
+#[test]
+#[should_panic(expected: 'Insufficient balance')]
+fn test_buy_product_with_insufficient_balance() {
+    // Deploy contracts
+    let (contract_address, owner, token_address) = setup_with_token();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+    let token_dispatcher = IERC20Dispatcher { contract_address: token_address };
+
+    // First add a product as owner
+    let name: felt252 = 'Apple';
+    let price: u32 = 5;
+    let stock: u32 = 100;
+    let description: ByteArray = "Fresh red apples";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "appleimage";
+
+    // Owner adds a product
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_product(name, price, stock, description, category, image);
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Create a buyer address with no tokens
+    let buyer_felt: felt252 = 0003.into();
+    let buyer: ContractAddress = buyer_felt.try_into().unwrap();
+    
+    // Buyer approves the contract to spend their tokens (even though they have none)
+    start_cheat_caller_address(token_address, buyer);
+    token_dispatcher.approve(contract_address, 1000_u256);
+    stop_cheat_caller_address(token_address);
+    
+    // Create a purchase array with one item
+    let mut purchases = array![];
+    let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
+    purchases.append(purchase_item);
+    
+    // Buy the product as buyer - this should fail with 'Insufficient balance'
+    start_cheat_caller_address(contract_instance.contract_address, buyer);
+    contract_instance.buy_product(purchases);
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+    
