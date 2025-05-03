@@ -80,7 +80,10 @@ pub mod SuperMarketV1 {
         orders: Map<u32, Order>, // Store orders by id
         order_items: Map<(u32, u32), OrderItem>, // Store order items by (order_id, item_index)
         order_count: u32, // Track number of orders
-        payment_token_address: ContractAddress // Store the payment token address
+        payment_token_address: ContractAddress, // Store the payment token address
+        // Buyer order tracking
+        buyer_order_count: Map<ContractAddress, u32>, // Track number of orders per buyer
+        buyer_orders: Map<(ContractAddress, u32), u32> // Map (buyer, index) to order_id
     }
 
     #[event]
@@ -613,9 +616,15 @@ pub mod SuperMarketV1 {
             let order_id = self.order_count.read() + 1;
             let timestamp = get_block_timestamp();
 
+            // Generate a unique transaction ID by combining a prefix with the timestamp
+            // STM prefix in ASCII: 'S'=83, 'T'=84, 'M'=77
+            let stm_prefix: felt252 = 'STM';
+            // Combine prefix with timestamp to create a unique ID
+            let trans_id: felt252 = stm_prefix * 1000000000 + timestamp.into();
+
             // Create new order
             let order = Order {
-                id: order_id, buyer, total_cost, timestamp, items_count: purchases_len,
+                id: order_id, trans_id: trans_id, buyer, total_cost, timestamp, items_count: purchases_len,
             };
 
             // Store the order
@@ -640,11 +649,16 @@ pub mod SuperMarketV1 {
                 product.stock = product.stock - quantity;
                 self.products.write(product_id, product);
 
-                i = i + 1_u32;
+                i = i + 1;
             }
 
             // Update order count
             self.order_count.write(order_id);
+            
+            // Update buyer's order count and store order ID in buyer's orders
+            let buyer_order_count = self.buyer_order_count.read(buyer);
+            self.buyer_orders.write((buyer, buyer_order_count), order_id);
+            self.buyer_order_count.write(buyer, buyer_order_count + 1);
 
             // Update total sales
             let current_sales = self.total_sales.read();
@@ -722,6 +736,36 @@ pub mod SuperMarketV1 {
             }
 
             orders
+        }
+        
+        // Get the number of orders for a specific buyer
+        fn get_buyer_order_count(self: @ContractState, buyer: ContractAddress) -> u32 {
+            // Simply read the count from storage instead of scanning all orders
+            self.buyer_order_count.read(buyer)
+        }
+        
+        // Get all orders with their items for a specific buyer
+        fn get_buyer_orders_with_items(self: @ContractState, buyer: ContractAddress) -> Array<(Order, Array<OrderItem>)> {
+            let buyer_order_count = self.buyer_order_count.read(buyer);
+            let mut orders_with_items = ArrayTrait::new();
+            
+            let mut i: u32 = 0;
+            while i != buyer_order_count {
+                // Get the order
+                let order_id = self.buyer_orders.read((buyer, i));
+                let order = self.orders.read(order_id);
+                
+                // Get the items for this order
+                let items = self.get_order_items(order_id);
+                
+                // Create a tuple of (order, items) and add it to the result array
+                let order_with_items = (order, items);
+                orders_with_items.append(order_with_items);
+                
+                i = i + 1;
+            }
+            
+            orders_with_items
         }
     }
 }

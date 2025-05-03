@@ -78,4 +78,10 @@ pub trait ISuperMarket<TContractState> {
 
     // get all orders
     fn get_all_orders(self: @TContractState) -> Array<Order>;
+    
+    // Get the number of orders for a specific buyer
+    fn get_buyer_order_count(self: @TContractState, buyer: ContractAddress) -> u32;
+    
+    // Get all orders with their items for a specific buyer
+    fn get_buyer_orders_with_items(self: @TContractState, buyer: ContractAddress) -> Array<(Order, Array<OrderItem>)>;
 }

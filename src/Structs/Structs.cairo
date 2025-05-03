@@ -22,6 +22,7 @@ pub struct PurchaseItem {
 #[derive(Clone, Debug, Drop, PartialEq, Serde, starknet::Store)]
 pub struct Order {
     pub id: u32,
+    pub trans_id: felt252,
     pub buyer: ContractAddress,
     pub total_cost: u32,
     pub timestamp: u64,
