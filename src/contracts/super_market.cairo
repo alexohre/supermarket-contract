@@ -656,7 +656,7 @@ pub mod SuperMarketV1 {
             total_cost
         }
 
-        fn withdraw_funds(ref self: ContractState, amount: u256) {
+        fn withdraw_funds(ref self: ContractState, to: ContractAddress, amount: u256) {
             // Check if contract is paused
             self.pausable.assert_not_paused();
 
@@ -675,9 +675,8 @@ pub mod SuperMarketV1 {
             let balance: u256 = erc20.balance_of(this_contract);
             assert(balance >= amount, 'INSUFFICIENT_STRK_BALANCE');
 
-            // Transfer tokens to the owner
-            let owner: ContractAddress = self.owner.read();
-            erc20.transfer(owner, amount);
+            // Transfer tokens to the address
+            erc20.transfer(to, amount);
         }
 
         // Get order items for a specific order

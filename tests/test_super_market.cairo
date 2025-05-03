@@ -1387,4 +1387,242 @@ fn test_buy_product_with_insufficient_balance() {
     contract_instance.buy_product(purchases);
     stop_cheat_caller_address(contract_instance.contract_address);
 }
+
+
+// ******* TEST WITHDRAW FUNDS *******
+// Test withdraw funds with default admin role (owner)
+#[test]
+fn test_withdraw_funds() {
+    // deploy contracts
+    let (contract_address, owner, token_address) = setup_with_token();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+    let token_dispatcher = IERC20Dispatcher { contract_address: token_address };
+
+    // First add a product as owner
+    let name: felt252 = 'Apple';
+    let price: u32 = 56;
+    let stock: u32 = 100;
+    let description: ByteArray = "Fresh red apples";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "appleimage";
+
+    // Owner adds a product
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_product(name, price, stock, description, category, image);
+    stop_cheat_caller_address(contract_instance.contract_address);
     
+    // Create a buyer address
+    let buyer_felt: felt252 = 0003.into();
+    let buyer: ContractAddress = buyer_felt.try_into().unwrap();
+    
+    // Transfer tokens from owner to buyer instead of minting
+    start_cheat_caller_address(token_address, owner);
+    token_dispatcher.transfer(buyer, 1000_u256);
+    stop_cheat_caller_address(token_address);
+    
+    // Buyer approves the contract to spend their tokens
+    start_cheat_caller_address(token_address, buyer);
+    token_dispatcher.approve(contract_address, 1000_u256);
+    stop_cheat_caller_address(token_address);
+    
+    // Create a purchase array with one item
+    let mut purchases = array![];
+    let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
+    purchases.append(purchase_item);
+    
+    // Check buyer's balance before purchase
+    let balance_before = token_dispatcher.balance_of(buyer);
+    
+    // Buy the product as buyer
+    start_cheat_caller_address(contract_instance.contract_address, buyer);
+    let total_cost = contract_instance.buy_product(purchases);
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Verify the total cost is correct (56 * 10 = 560)
+    assert(total_cost == 560, 'Incorrect total cost');
+    
+    // Verify the product stock was updated
+    let product = contract_instance.get_product_by_id(1);
+    assert(product.stock == 90, 'Stock not updated correctly');
+    
+    // Check buyer's balance after purchase
+    let balance_after = token_dispatcher.balance_of(buyer);
+    let expected_balance = balance_before - total_cost.into();
+    assert(balance_after == expected_balance, 'Token not deducted correctly');
+    
+    // Check contract's token balance
+    let contract_balance = token_dispatcher.balance_of(contract_address);
+    assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
+
+    let to: ContractAddress = owner;
+    let amount: u256 = total_cost.into();
+
+    // Withdraw funds as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.withdraw_funds(to, amount);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Check contract's token balance
+    let contract_balance = token_dispatcher.balance_of(contract_address);
+    assert(contract_balance == 0, 'Withdraw failed');
+}
+
+// test withdraw funds with insufficient balance
+#[test]
+#[should_panic(expected: 'INSUFFICIENT_STRK_BALANCE')]
+fn test_withdraw_funds_with_insufficient_balance() {
+    // Deploy contracts
+    let (contract_address, owner, token_address) = setup_with_token();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+    let token_dispatcher = IERC20Dispatcher { contract_address: token_address };
+
+    // First add a product as owner
+    let name: felt252 = 'Apple';
+    let price: u32 = 5;
+    let stock: u32 = 100;
+    let description: ByteArray = "Fresh red apples";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "appleimage";
+
+    // Owner adds a product
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_product(name, price, stock, description, category, image);
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Create a buyer address
+    let buyer_felt: felt252 = 0003.into();
+    let buyer: ContractAddress = buyer_felt.try_into().unwrap();
+    
+    // Transfer tokens from owner to buyer instead of minting
+    start_cheat_caller_address(token_address, owner);
+    token_dispatcher.transfer(buyer, 1000_u256);
+    stop_cheat_caller_address(token_address);
+    
+    // Buyer approves the contract to spend their tokens
+    start_cheat_caller_address(token_address, buyer);
+    token_dispatcher.approve(contract_address, 1000_u256);
+    stop_cheat_caller_address(token_address);
+    
+    // Create a purchase array with one item
+    let mut purchases = array![];
+    let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
+    purchases.append(purchase_item);
+    
+    // Check buyer's balance before purchase
+    let balance_before = token_dispatcher.balance_of(buyer);
+    
+    // Buy the product as buyer
+    start_cheat_caller_address(contract_instance.contract_address, buyer);
+    let total_cost = contract_instance.buy_product(purchases);
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Verify the total cost is correct (5 * 10 = 50)
+    assert(total_cost == 50, 'Incorrect total cost');
+    
+    // Verify the product stock was updated
+    let product = contract_instance.get_product_by_id(1);
+    assert(product.stock == 90, 'Stock not updated correctly');
+    
+    // Check buyer's balance after purchase
+    let balance_after = token_dispatcher.balance_of(buyer);
+    let expected_balance = balance_before - total_cost.into();
+    assert(balance_after == expected_balance, 'Token not deducted correctly');
+    
+    // Check contract's token balance
+    let contract_balance = token_dispatcher.balance_of(contract_address);
+    assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
+
+    let to: ContractAddress = owner;
+    let amount: u256 = 5000_u256;
+
+    // Withdraw funds as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.withdraw_funds(to, amount);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Check contract's token balance
+    let contract_balance = token_dispatcher.balance_of(contract_address);
+    assert(contract_balance == 0, 'Withdraw failed');
+}
+
+// test withdraw funds with non owner
+#[test]
+#[should_panic(expected: 'Caller is not the admin')]
+fn test_withdraw_funds_with_non_owner() {
+    // Deploy contracts
+    let (contract_address, owner, token_address) = setup_with_token();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+    let token_dispatcher = IERC20Dispatcher { contract_address: token_address };
+
+    // First add a product as owner
+    let name: felt252 = 'Apple';
+    let price: u32 = 5;
+    let stock: u32 = 100;
+    let description: ByteArray = "Fresh red apples";
+    let category: felt252 = 'fruit';
+    let image: ByteArray = "appleimage";
+
+    // Owner adds a product
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_product(name, price, stock, description, category, image);
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Create a buyer address
+    let buyer_felt: felt252 = 0003.into();
+    let buyer: ContractAddress = buyer_felt.try_into().unwrap();
+    
+    // Transfer tokens from owner to buyer instead of minting
+    start_cheat_caller_address(token_address, owner);
+    token_dispatcher.transfer(buyer, 1000_u256);
+    stop_cheat_caller_address(token_address);
+    
+    // Buyer approves the contract to spend their tokens
+    start_cheat_caller_address(token_address, buyer);
+    token_dispatcher.approve(contract_address, 1000_u256);
+    stop_cheat_caller_address(token_address);
+    
+    // Create a purchase array with one item
+    let mut purchases = array![];
+    let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
+    purchases.append(purchase_item);
+    
+    // Check buyer's balance before purchase
+    let balance_before = token_dispatcher.balance_of(buyer);
+    
+    // Buy the product as buyer
+    start_cheat_caller_address(contract_instance.contract_address, buyer);
+    let total_cost = contract_instance.buy_product(purchases);
+    stop_cheat_caller_address(contract_instance.contract_address);
+    
+    // Verify the total cost is correct (5 * 10 = 50)
+    assert(total_cost == 50, 'Incorrect total cost');
+    
+    // Verify the product stock was updated
+    let product = contract_instance.get_product_by_id(1);
+    assert(product.stock == 90, 'Stock not updated correctly');
+    
+    // Check buyer's balance after purchase
+    let balance_after = token_dispatcher.balance_of(buyer);
+    let expected_balance = balance_before - total_cost.into();
+    assert(balance_after == expected_balance, 'Token not deducted correctly');
+    
+    // Check contract's token balance
+    let contract_balance = token_dispatcher.balance_of(contract_address);
+    assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
+
+    // Create a random address
+    let random_felt: felt252 = 0003.into();
+    let random: ContractAddress = random_felt.try_into().unwrap();
+
+    let to: ContractAddress = random;
+    let amount: u256 = 5000_u256;
+
+    // Withdraw funds as owner
+    start_cheat_caller_address(contract_instance.contract_address, random);
+    contract_instance.withdraw_funds(to, amount);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Check contract's token balance
+    let contract_balance = token_dispatcher.balance_of(contract_address);
+    assert(contract_balance == 0, 'Withdraw failed');
+}

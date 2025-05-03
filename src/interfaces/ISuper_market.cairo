@@ -26,7 +26,7 @@ pub trait ISuperMarket<TContractState> {
     fn get_admin_count(self: @TContractState) -> u32;
 
     // withdraw funds
-    fn withdraw_funds(ref self: TContractState, amount: u256);
+    fn withdraw_funds(ref self: TContractState, to: ContractAddress, amount: u256);
 
     // Pausable functions
     fn pause_contract(ref self: TContractState);
