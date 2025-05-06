@@ -10,8 +10,9 @@ pub mod Structs {
 
 // import contracts
 pub mod contracts {
-    pub mod super_market;
     pub mod MockToken;
+    pub mod SuperMarketNft;
+    pub mod super_market;
 }
 
 // import events

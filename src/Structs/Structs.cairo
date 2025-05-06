@@ -36,3 +36,22 @@ pub struct OrderItem {
     pub quantity: u32,
     pub price: u32,
 }
+
+// Define reward tiers for NFT rewards
+#[derive(Clone, Debug, Drop, PartialEq, Serde, starknet::Store)]
+pub struct RewardTier {
+    pub id: u32,
+    pub name: felt252,
+    pub description: ByteArray,
+    pub threshold: u32, // Minimum order total to qualify
+    pub image_uri: ByteArray // URI for the NFT image
+}
+
+// Define a structure to track claimed rewards
+#[derive(Clone, Debug, Drop, PartialEq, Serde, starknet::Store)]
+pub struct ClaimedReward {
+    pub buyer: ContractAddress,
+    pub order_id: u32,
+    pub reward_tier_id: u32,
+    pub claimed_at: u64,
+}

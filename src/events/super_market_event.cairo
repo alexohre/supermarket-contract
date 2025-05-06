@@ -49,3 +49,34 @@ pub struct ProductPurchased {
     pub total_cost: u32,
     // pub product_ids: Array<u32>,
 }
+
+#[derive(Clone, Drop, Debug, starknet::Event)]
+pub struct RewardClaimed {
+    pub buyer: ContractAddress,
+    pub order_id: u32,
+    pub reward_tier_id: u32,
+    pub claimed_at: u64,
+}
+
+#[derive(Clone, Drop, Debug, starknet::Event)]
+pub struct RewardTierAdded {
+    pub id: u32,
+    pub name: felt252,
+    pub description: ByteArray,
+    pub threshold: u32,
+    pub image_uri: ByteArray,
+}
+
+#[derive(Clone, Drop, Debug, starknet::Event)]
+pub struct RewardTierUpdated {
+    pub id: u32,
+    pub name: felt252,
+    pub description: ByteArray,
+    pub threshold: u32,
+    pub image_uri: ByteArray,
+}
+
+#[derive(Clone, Drop, Debug, starknet::Event)]
+pub struct RewardTierDeleted {
+    pub id: u32,
+}

@@ -1,51 +1,52 @@
-use snforge_std::{
-    ContractClassTrait, DeclareResultTrait, declare, spy_events,
-    start_cheat_caller_address, stop_cheat_caller_address,
-    EventSpyTrait,
-    EventsFilterTrait
-};
-use starknet::{ContractAddress};
 use core::traits::TryInto;
-use super_market::interfaces::ISuper_market::{ISuperMarketDispatcher, ISuperMarketDispatcherTrait};
-use super_market::Structs::Structs::{PurchaseItem};
 use openzeppelin::token::erc20::interface::{IERC20Dispatcher, IERC20DispatcherTrait};
+use snforge_std::{
+    ContractClassTrait, DeclareResultTrait, EventSpyTrait, EventsFilterTrait, declare, spy_events,
+    start_cheat_caller_address, stop_cheat_caller_address,
+};
+use starknet::ContractAddress;
+use super_market::Structs::Structs::PurchaseItem;
+use super_market::interfaces::ISuper_market::{ISuperMarketDispatcher, ISuperMarketDispatcherTrait};
 
 // Constants for roles
 const ADMIN_ROLE: felt252 = selector!("ADMIN_ROLE");
 const PAUSER_ROLE: felt252 = selector!("PAUSER_ROLE");
 const UPGRADER_ROLE: felt252 = selector!("UPGRADER_ROLE");
 
-// Special test address that bypasses token payment
-const TEST_ADDRESS_FELT: felt252 = 0x1234_TEST_ADDRESS;
-
 // Setup function that returns contract address and owner address
 fn setup() -> (ContractAddress, ContractAddress) {
     // Create owner address using TryInto
     let owner_felt: felt252 = 0001.into();
     let owner: ContractAddress = owner_felt.try_into().unwrap();
-    
+
     // Deploy mock token first for payment
     let token_class = declare("MockToken").unwrap().contract_class();
-    let (token_address, _) = token_class.deploy(@array![
-        owner.into(), // recipient
-        owner.into()  // owner
+    let (token_address, _) = token_class
+        .deploy(@array![owner.into(), // recipient
+        owner.into() // owner
+        ])
+        .unwrap();
+
+    // deploy nft contract
+    let nft_class = declare("SuperMarketNft").unwrap().contract_class();
+    // Deploy nft with owner as owner
+    let (nft_address, _) = nft_class.deploy(@array![owner.into() // owner
     ]).unwrap();
-    
+
     // Deploy super market contract
     let contract_class = declare("SuperMarketV1").unwrap().contract_class();
     // Deploy with owner address as the default_admin parameter and token address for payments
-    let (contract_address, _) = contract_class.deploy(@array![
-        owner.into(),
-        token_address.into()
-    ]).unwrap();
-    
+    let (contract_address, _) = contract_class
+        .deploy(@array![owner.into(), token_address.into(), nft_address.into()])
+        .unwrap();
+
     (contract_address, owner)
 }
 
 // Setup function that also adds an admin
 fn setup_with_admin() -> (ContractAddress, ContractAddress, ContractAddress) {
     let (contract_address, owner) = setup();
-    
+
     // Create admin address using TryInto
     let admin_felt: felt252 = 0002.into();
     let admin: ContractAddress = admin_felt.try_into().unwrap();
@@ -64,24 +65,30 @@ fn setup_with_token() -> (ContractAddress, ContractAddress, ContractAddress) {
     // Create owner address using TryInto
     let owner_felt: felt252 = 0001.into();
     let owner: ContractAddress = owner_felt.try_into().unwrap();
-    
+
     // Deploy mock token first
     let token_class = declare("MockToken").unwrap().contract_class();
-    
+
     // Deploy token with owner as recipient and owner
-    let (token_address, _) = token_class.deploy(@array![
-        owner.into(), // recipient
-        owner.into()  // owner
+    let (token_address, _) = token_class
+        .deploy(@array![owner.into(), // recipient
+        owner.into() // owner
+        ])
+        .unwrap();
+
+    // deploy nft contract
+    let nft_class = declare("SuperMarketNft").unwrap().contract_class();
+    // Deploy nft with owner as owner
+    let (nft_address, _) = nft_class.deploy(@array![owner.into() // owner
     ]).unwrap();
-    
+
     // Deploy super market contract
     let contract_class = declare("SuperMarketV1").unwrap().contract_class();
     // Deploy with owner address as the default_admin parameter and token address for payments
-    let (contract_address, _) = contract_class.deploy(@array![
-        owner.into(),
-        token_address.into()
-    ]).unwrap();
-    
+    let (contract_address, _) = contract_class
+        .deploy(@array![owner.into(), token_address.into(), nft_address.into()])
+        .unwrap();
+
     // Return addresses
     (contract_address, owner, token_address)
 }
@@ -203,16 +210,16 @@ fn test_add_product_emit_event() {
     // Get all events and verify an event was emitted
     let events = spy.get_events();
     assert(events.events.len() > 0, 'No events were emitted');
-    
+
     // Verify the event came from our contract
     let events_from_contract = events.emitted_by(contract_address);
     assert(events_from_contract.events.len() > 0, 'No events from contract');
-    
+
     // Check that the event has the correct key (event name)
     let (_, event) = events_from_contract.events.at(0);
     assert(event.keys.len() > 0, 'Event has no keys');
     assert(event.keys.at(0) == @selector!("ProductCreated"), 'Wrong event name');
-    
+
     // Check that the event data contains the correct product ID
     assert(event.data.len() > 0, 'Event has no data');
     // Event data is stored as felt252, so we need to convert our u32 to felt252 for comparison
@@ -303,10 +310,10 @@ fn test_update_product_with_default_admin() {
 
     // Add product
     contract_instance.add_product(name, price, stock, description, category, image);
-    
+
     // Verify product was added
     assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
-    
+
     // Now update the product
     let updated_name: felt252 = 'Green Apple';
     let updated_price: u32 = 2;
@@ -314,18 +321,19 @@ fn test_update_product_with_default_admin() {
     let updated_description: ByteArray = "Fresh green apples from local farm";
     let updated_category: felt252 = 'fruit';
     let updated_image: ByteArray = "greenappleimage";
-    
+
     // Update the product
-    contract_instance.update_product(
-        1, // product ID
-        updated_name,
-        updated_price,
-        updated_stock,
-        updated_description.clone(),
-        updated_category,
-        updated_image.clone()
-    );
-    
+    contract_instance
+        .update_product(
+            1, // product ID
+            updated_name,
+            updated_price,
+            updated_stock,
+            updated_description.clone(),
+            updated_category,
+            updated_image.clone(),
+        );
+
     // Verify the product data was updated using get_product_by_id
     let product = contract_instance.get_product_by_id(1);
     assert(product.name == updated_name, 'Name not updated');
@@ -334,7 +342,7 @@ fn test_update_product_with_default_admin() {
     assert(product.description.len() == updated_description.len(), 'Description length mismatch');
     assert(product.category == updated_category, 'Category not updated');
     assert(product.image.len() == updated_image.len(), 'Image length mismatch');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -358,10 +366,10 @@ fn test_update_product_with_admin_role() {
 
     // Add product
     contract_instance.add_product(name, price, stock, description, category, image);
-    
+
     // Verify product was added
     assert(contract_instance.get_prdct_id() == 1, 'Product not added by admin');
-    
+
     // Now update the product
     let updated_name: felt252 = 'Ripe Banana';
     let updated_price: u32 = 3;
@@ -369,18 +377,19 @@ fn test_update_product_with_admin_role() {
     let updated_description: ByteArray = "Ripe yellow bananas";
     let updated_category: felt252 = 'fruit';
     let updated_image: ByteArray = "ripebananaimage";
-    
+
     // Update the product
-    contract_instance.update_product(
-        1, // product ID
-        updated_name,
-        updated_price,
-        updated_stock,
-        updated_description.clone(),
-        updated_category,
-        updated_image.clone()
-    );
-    
+    contract_instance
+        .update_product(
+            1, // product ID
+            updated_name,
+            updated_price,
+            updated_stock,
+            updated_description.clone(),
+            updated_category,
+            updated_image.clone(),
+        );
+
     // Verify the product data was updated using get_product_by_id
     let product = contract_instance.get_product_by_id(1);
     assert(product.name == updated_name, 'Name not updated');
@@ -389,7 +398,7 @@ fn test_update_product_with_admin_role() {
     assert(product.description.len() == updated_description.len(), 'Description length mismatch');
     assert(product.category == updated_category, 'Category not updated');
     assert(product.image.len() == updated_image.len(), 'Image length mismatch');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -419,18 +428,19 @@ fn test_update_product_with_random_address() {
 
     // Random user tries to update the product
     start_cheat_caller_address(contract_instance.contract_address, random_user);
-    
+
     // This should panic with the message 'Not authorized'
-    contract_instance.update_product(
-        1, // product ID
-        'Better Orange',
-        4,
-        20,
-        "Better juicy oranges".clone(),
-        'fruit',
-        "betterorangeimage".clone()
-    );
-    
+    contract_instance
+        .update_product(
+            1, // product ID
+            'Better Orange',
+            4,
+            20,
+            "Better juicy oranges".clone(),
+            'fruit',
+            "betterorangeimage".clone(),
+        );
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -453,10 +463,10 @@ fn test_update_product_emit_event() {
 
     // Add product
     contract_instance.add_product(name, price, stock, description, category, image);
-    
+
     // Verify product was added
     assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
-    
+
     // Now update the product
     let updated_name: felt252 = 'Green Grape';
     let updated_price: u32 = 5;
@@ -464,44 +474,45 @@ fn test_update_product_emit_event() {
     let updated_description: ByteArray = "Green grapes";
     let updated_category: felt252 = 'fruit';
     let updated_image: ByteArray = "greengrapeimage";
-    
+
     let mut spy = spy_events();
-    
+
     // Update the product
-    contract_instance.update_product(
-        1, // product ID
-        updated_name,
-        updated_price,
-        updated_stock,
-        updated_description.clone(),
-        updated_category,
-        updated_image.clone()
-    );
-    
+    contract_instance
+        .update_product(
+            1, // product ID
+            updated_name,
+            updated_price,
+            updated_stock,
+            updated_description.clone(),
+            updated_category,
+            updated_image.clone(),
+        );
+
     stop_cheat_caller_address(contract_instance.contract_address);
 
     // Get all events and verify an event was emitted
     let events = spy.get_events();
     assert(events.events.len() > 0, 'No events were emitted');
-    
+
     // Verify the event came from our contract
     let events_from_contract = events.emitted_by(contract_address);
     assert(events_from_contract.events.len() > 0, 'No events from contract');
-    
+
     // Check that the event has the correct key (event name)
     let (_, event) = events_from_contract.events.at(0);
     println!("Event keys: {}", event.keys.len());
     println!("Event data: {}", event.data.len());
     println!("Event name: {}", event.keys.at(0));
     assert(event.keys.len() > 0, 'Event has no keys');
-    
+
     // Get the selector for ProductUpdated
     let product_updated_selector = selector!("ProductUpdated");
     println!("Expected selector: {}", product_updated_selector);
-    
+
     // Compare the event key with the selector
     assert(*event.keys.at(0) == product_updated_selector, 'Wrong event name');
-    
+
     // Check that the event data contains the correct product ID
     assert(event.data.len() > 0, 'Event has no data');
     assert(event.data.at(0) == @1.into(), 'Product ID should be 1');
@@ -527,13 +538,13 @@ fn test_update_product_when_paused() {
 
     // Add product
     contract_instance.add_product(name, price, stock, description, category, image);
-    
+
     // Verify product was added
     assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
-    
+
     // Pause the contract
     contract_instance.pause_contract();
-    
+
     // Try to update the product while the contract is paused
     let updated_name: felt252 = 'Red Strawberry';
     let updated_price: u32 = 6;
@@ -541,18 +552,19 @@ fn test_update_product_when_paused() {
     let updated_description: ByteArray = "Fresh red strawberries";
     let updated_category: felt252 = 'fruit';
     let updated_image: ByteArray = "redstrawberryimage";
-    
+
     // This should panic with "Pausable: paused"
-    contract_instance.update_product(
-        1, // product ID
-        updated_name,
-        updated_price,
-        updated_stock,
-        updated_description.clone(),
-        updated_category,
-        updated_image.clone()
-    );
-    
+    contract_instance
+        .update_product(
+            1, // product ID
+            updated_name,
+            updated_price,
+            updated_stock,
+            updated_description.clone(),
+            updated_category,
+            updated_image.clone(),
+        );
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -570,21 +582,22 @@ fn test_update_product_after_unpause() {
     let category: felt252 = 'fruit';
     let image: ByteArray = "blueberryimage";
 
-    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products and pause/unpause the contract
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products and pause/unpause the
+    // contract
     start_cheat_caller_address(contract_instance.contract_address, owner);
 
     // Add product
     contract_instance.add_product(name, price, stock, description, category, image);
-    
+
     // Verify product was added
     assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
-    
+
     // Pause the contract
     contract_instance.pause_contract();
-    
+
     // Unpause the contract
     contract_instance.unpause_contract();
-    
+
     // Update the product after unpausing
     let updated_name: felt252 = 'Organic Blueberry';
     let updated_price: u32 = 8;
@@ -592,18 +605,19 @@ fn test_update_product_after_unpause() {
     let updated_description: ByteArray = "Fresh organic blueberries";
     let updated_category: felt252 = 'fruit';
     let updated_image: ByteArray = "organicblueberryimage";
-    
+
     // This should succeed now that the contract is unpaused
-    contract_instance.update_product(
-        1, // product ID
-        updated_name,
-        updated_price,
-        updated_stock,
-        updated_description.clone(),
-        updated_category,
-        updated_image.clone()
-    );
-    
+    contract_instance
+        .update_product(
+            1, // product ID
+            updated_name,
+            updated_price,
+            updated_stock,
+            updated_description.clone(),
+            updated_category,
+            updated_image.clone(),
+        );
+
     // Verify the product data was updated using get_product_by_id
     let product = contract_instance.get_product_by_id(1);
     assert(product.name == updated_name, 'Name not updated');
@@ -612,10 +626,9 @@ fn test_update_product_after_unpause() {
     assert(product.description.len() == updated_description.len(), 'Description length mismatch');
     assert(product.category == updated_category, 'Category not updated');
     assert(product.image.len() == updated_image.len(), 'Image length mismatch');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
-
 
 
 // ******* Test delete product *******
@@ -639,17 +652,17 @@ fn test_delete_product_with_default_admin() {
 
     // Add product
     contract_instance.add_product(name, price, stock, description, category, image);
-    
+
     // Verify product was added
     assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
-    
+
     // Now delete the product
     contract_instance.delete_product(1);
-    
+
     // Verify the product was deleted by checking that it has id = 0
     let product = contract_instance.get_product_by_id(1);
     assert(product.id == 0, 'Product not deleted');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -673,17 +686,17 @@ fn test_delete_product_with_admin_role() {
 
     // Add product
     contract_instance.add_product(name, price, stock, description, category, image);
-    
+
     // Verify product was added
     assert(contract_instance.get_prdct_id() == 1, 'Product not added by admin');
-    
+
     // Now delete the product
     contract_instance.delete_product(1);
-    
+
     // Verify the product was deleted by checking that it has id = 0
     let product = contract_instance.get_product_by_id(1);
     assert(product.id == 0, 'Product not deleted');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -710,13 +723,13 @@ fn test_delete_product_with_random_address() {
     start_cheat_caller_address(contract_instance.contract_address, owner);
     contract_instance.add_product(name, price, stock, description, category, image);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Random user tries to delete the product
     start_cheat_caller_address(contract_instance.contract_address, random_user);
-    
+
     // This should panic with the message 'Not authorized'
     contract_instance.delete_product(1);
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -739,36 +752,36 @@ fn test_delete_product_emit_event() {
 
     // Add product
     contract_instance.add_product(name, price, stock, description, category, image);
-    
+
     let mut spy = spy_events();
-    
+
     // Delete the product
     contract_instance.delete_product(1);
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Get the emitted events
     let events = spy.get_events();
     assert(events.events.len() > 0, 'No events were emitted');
-    
+
     // Verify the event came from our contract
     let events_from_contract = events.emitted_by(contract_address);
     assert(events_from_contract.events.len() > 0, 'No events from contract');
-    
+
     // Check that the event has the correct key (event name)
     let (_, event) = events_from_contract.events.at(0);
     println!("Event keys: {}", event.keys.len());
     println!("Event data: {}", event.data.len());
     println!("Event name: {}", event.keys.at(0));
     assert(event.keys.len() > 0, 'Event has no keys');
-    
+
     // Get the selector for ProductDeleted
     let product_deleted_selector = selector!("ProductDeleted");
     println!("Expected selector: {}", product_deleted_selector);
-    
+
     // Compare the event key with the selector
     assert(*event.keys.at(0) == product_deleted_selector, 'Wrong event name');
-    
+
     // Check that the event data contains the correct product ID
     assert(event.data.len() > 0, 'Event has no data');
     assert(event.data.at(0) == @1.into(), 'Product ID should be 1');
@@ -794,17 +807,17 @@ fn test_delete_product_when_paused() {
 
     // Add product
     contract_instance.add_product(name, price, stock, description, category, image);
-    
+
     // Verify product was added
     assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
-    
+
     // Pause the contract
     contract_instance.pause_contract();
-    
+
     // Try to delete the product while the contract is paused
     // This should panic with "Pausable: paused"
     contract_instance.delete_product(1);
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -822,28 +835,29 @@ fn test_delete_product_after_unpause() {
     let category: felt252 = 'fruit';
     let image: ByteArray = "apricotimage";
 
-    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products and pause/unpause the contract
+    // Owner has DEFAULT_ADMIN_ROLE and should be able to add products and pause/unpause the
+    // contract
     start_cheat_caller_address(contract_instance.contract_address, owner);
 
     // Add product
     contract_instance.add_product(name, price, stock, description, category, image);
-    
+
     // Verify product was added
     assert(contract_instance.get_prdct_id() == 1, 'Product not added by owner');
-    
+
     // Pause the contract
     contract_instance.pause_contract();
-    
+
     // Unpause the contract
     contract_instance.unpause_contract();
-    
+
     // Delete the product after unpausing
     contract_instance.delete_product(1);
-    
+
     // Verify the product was deleted by checking that it has id = 0
     let product = contract_instance.get_product_by_id(1);
     assert(product.id == 0, 'Product not deleted');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -863,10 +877,10 @@ fn test_add_admin_with_default_admin() {
 
     // Add admin
     contract_instance.add_admin(admin);
-    
+
     // Verify admin was added
     assert(contract_instance.is_admin(admin), 'Admin not added by owner');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -886,10 +900,10 @@ fn test_add_admin_with_admin_role() {
 
     // Add the new admin
     contract_instance.add_admin(new_admin);
-    
+
     // Verify new admin was added
     assert(contract_instance.is_admin(new_admin), 'New admin not added by admin');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -931,39 +945,39 @@ fn test_add_admin_emit_event() {
 
     // Add admin
     contract_instance.add_admin(admin);
-    
+
     // Verify admin was added
     assert(contract_instance.is_admin(admin), 'Admin not added by owner');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Get the emitted events
     let events = spy.get_events();
     assert(events.events.len() > 0, 'No events were emitted');
-    
+
     // Verify the event came from our contract
     let events_from_contract = events.emitted_by(contract_address);
     assert(events_from_contract.events.len() > 0, 'No events from contract');
-    
+
     // Check that the event has the correct key (event name)
     let (_, event) = events_from_contract.events.at(0);
     println!("Event keys: {}", event.keys.len());
     println!("Event data: {}", event.data.len());
-    
+
     // Print the actual event name
     let event_name = *event.keys.at(0);
     println!("Event name: {}", event_name);
-    
+
     // Print all possible selectors for comparison
     println!("AdminAdded selector: {}", selector!("AdminAdded"));
     println!("RoleGranted selector: {}", selector!("RoleGranted"));
-    
+
     // Check for either AdminAdded or RoleGranted event
     let is_admin_added = event_name == selector!("AdminAdded");
     let is_role_granted = event_name == selector!("RoleGranted");
-    
+
     assert(is_admin_added || is_role_granted, 'Expected admin event');
-    
+
     // If it's an AdminAdded event, check the admin address
     if is_admin_added {
         assert(event.data.len() > 0, 'Event has no data');
@@ -984,16 +998,16 @@ fn test_add_admin_when_paused() {
 
     // Owner has DEFAULT_ADMIN_ROLE and should be able to add admins
     start_cheat_caller_address(contract_instance.contract_address, owner);
-    
+
     // Pause the contract
     contract_instance.pause_contract();
-    
+
     // Add admin
     contract_instance.add_admin(admin);
-    
+
     // Verify admin was added
     assert(contract_instance.is_admin(admin), 'Admin not added by owner');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -1012,22 +1026,22 @@ fn test_add_admin_after_unpause() {
 
     // Add admin
     contract_instance.add_admin(admin);
-    
+
     // Verify admin was added
     assert(contract_instance.is_admin(admin), 'Admin not added by owner');
-    
+
     // Pause the contract
     contract_instance.pause_contract();
-    
+
     // Unpause the contract
     contract_instance.unpause_contract();
-    
+
     // Add admin
     contract_instance.add_admin(admin);
-    
+
     // Verify admin was added
     assert(contract_instance.is_admin(admin), 'Admin not added by owner');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -1048,16 +1062,16 @@ fn test_remove_admin_with_default_admin() {
 
     // Add admin
     contract_instance.add_admin(admin);
-    
+
     // Verify admin was added
     assert(contract_instance.is_admin(admin), 'Admin not added by owner');
-    
+
     // Remove admin
     contract_instance.remove_admin(admin);
-    
+
     // Verify admin was removed
     assert(!contract_instance.is_admin(admin), 'Admin not removed by owner');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -1078,16 +1092,16 @@ fn test_remove_admin_with_admin_role() {
 
     // Add admin
     contract_instance.add_admin(new_admin);
-    
+
     // Verify admin was added
     assert(contract_instance.is_admin(new_admin), 'Admin not added by admin');
-    
+
     // Remove admin
     contract_instance.remove_admin(new_admin);
-    
+
     // Verify admin was removed
     assert(!contract_instance.is_admin(new_admin), 'Admin not removed by admin');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -1104,13 +1118,13 @@ fn test_remove_admin_with_random_address() {
 
     // Random user tries to remove admin
     start_cheat_caller_address(contract_instance.contract_address, random_user);
-    
+
     // This should panic with the message 'Not authorized'
     contract_instance.remove_admin(random_user);
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
-    
+
 
 // Test remove admin events
 #[test]
@@ -1127,48 +1141,48 @@ fn test_remove_admin_emit_event() {
 
     // Add admin
     contract_instance.add_admin(admin);
-    
+
     // Verify admin was added
     assert(contract_instance.is_admin(admin), 'Admin not added by owner');
-    
+
     // Start spying on events before removing admin
     let mut spy = spy_events();
-    
+
     // Remove admin
     contract_instance.remove_admin(admin);
-    
+
     // Verify admin was removed
     assert(!contract_instance.is_admin(admin), 'Admin not removed by owner');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Get the emitted events
     let events = spy.get_events();
     assert(events.events.len() > 0, 'No events were emitted');
-    
+
     // Verify the event came from our contract
     let events_from_contract = events.emitted_by(contract_address);
     assert(events_from_contract.events.len() > 0, 'No events from contract');
-    
+
     // Check that the event has the correct key (event name)
     let (_, event) = events_from_contract.events.at(0);
     println!("Event keys: {}", event.keys.len());
     println!("Event data: {}", event.data.len());
-    
+
     // Print the actual event name
     let event_name = *event.keys.at(0);
     println!("Event name: {}", event_name);
-    
+
     // Print all possible selectors for comparison
     println!("AdminRemoved selector: {}", selector!("AdminRemoved"));
     println!("RoleRevoked selector: {}", selector!("RoleRevoked"));
-    
+
     // Check for either AdminRemoved or RoleRevoked event
     let is_admin_removed = event_name == selector!("AdminRemoved");
     let is_role_revoked = event_name == selector!("RoleRevoked");
-    
+
     assert(is_admin_removed || is_role_revoked, 'Expected admin event');
-    
+
     // If it's an AdminRemoved event, check the admin address
     if is_admin_removed {
         assert(event.data.len() > 0, 'Event has no data');
@@ -1192,19 +1206,19 @@ fn test_remove_admin_when_paused() {
 
     // Add admin
     contract_instance.add_admin(admin);
-    
+
     // Verify admin was added
     assert(contract_instance.is_admin(admin), 'Admin not added by owner');
-    
+
     // Pause the contract
     contract_instance.pause_contract();
-    
+
     // Remove admin
     contract_instance.remove_admin(admin);
-    
+
     // Verify admin was removed
     assert(!contract_instance.is_admin(admin), 'Admin not removed by owner');
-    
+
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -1217,7 +1231,7 @@ fn test_buy_product_with_token() {
     let (contract_address, owner, token_address) = setup_with_token();
     let contract_instance = ISuperMarketDispatcher { contract_address };
     let token_dispatcher = IERC20Dispatcher { contract_address: token_address };
-    
+
     // First add a product as owner
     let name: felt252 = 'Apple';
     let price: u32 = 5;
@@ -1230,46 +1244,46 @@ fn test_buy_product_with_token() {
     start_cheat_caller_address(contract_instance.contract_address, owner);
     contract_instance.add_product(name, price, stock, description, category, image);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Create a buyer address
     let buyer_felt: felt252 = 0003.into();
     let buyer: ContractAddress = buyer_felt.try_into().unwrap();
-    
+
     // Transfer tokens from owner to buyer instead of minting
     start_cheat_caller_address(token_address, owner);
     token_dispatcher.transfer(buyer, 1000_u256);
     stop_cheat_caller_address(token_address);
-    
+
     // Buyer approves the contract to spend their tokens
     start_cheat_caller_address(token_address, buyer);
     token_dispatcher.approve(contract_address, 1000_u256);
     stop_cheat_caller_address(token_address);
-    
+
     // Create a purchase array with one item
     let mut purchases = array![];
     let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
     purchases.append(purchase_item);
-    
+
     // Check buyer's balance before purchase
     let balance_before = token_dispatcher.balance_of(buyer);
-    
+
     // Buy the product as buyer
     start_cheat_caller_address(contract_instance.contract_address, buyer);
     let total_cost = contract_instance.buy_product(purchases);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Verify the total cost is correct (5 * 10 = 50)
     assert(total_cost == 50, 'Incorrect total cost');
-    
+
     // Verify the product stock was updated
     let product = contract_instance.get_product_by_id(1);
     assert(product.stock == 90, 'Stock not updated correctly');
-    
+
     // Check buyer's balance after purchase
     let balance_after = token_dispatcher.balance_of(buyer);
     let expected_balance = balance_before - total_cost.into();
     assert(balance_after == expected_balance, 'Token not deducted correctly');
-    
+
     // Check contract's token balance
     let contract_balance = token_dispatcher.balance_of(contract_address);
     assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
@@ -1283,7 +1297,7 @@ fn test_buy_product_when_paused() {
     let (contract_address, owner, token_address) = setup_with_token();
     let contract_instance = ISuperMarketDispatcher { contract_address };
     let token_dispatcher = IERC20Dispatcher { contract_address: token_address };
-    
+
     // First add a product as owner
     let name: felt252 = 'Apple';
     let price: u32 = 5;
@@ -1296,26 +1310,26 @@ fn test_buy_product_when_paused() {
     start_cheat_caller_address(contract_instance.contract_address, owner);
     contract_instance.add_product(name, price, stock, description, category, image);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Create a buyer address
     let buyer_felt: felt252 = 0003.into();
     let buyer: ContractAddress = buyer_felt.try_into().unwrap();
-    
+
     // Transfer tokens from owner to buyer instead of minting
     start_cheat_caller_address(token_address, owner);
     token_dispatcher.transfer(buyer, 1000_u256);
     stop_cheat_caller_address(token_address);
-    
+
     // Buyer approves the contract to spend their tokens
     start_cheat_caller_address(token_address, buyer);
     token_dispatcher.approve(contract_address, 1000_u256);
     stop_cheat_caller_address(token_address);
-    
+
     // Create a purchase array with one item
     let mut purchases = array![];
     let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
     purchases.append(purchase_item);
-    
+
     // Check buyer's balance before purchase
     let balance_before = token_dispatcher.balance_of(buyer);
 
@@ -1323,24 +1337,24 @@ fn test_buy_product_when_paused() {
     start_cheat_caller_address(contract_instance.contract_address, owner);
     contract_instance.pause_contract();
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Buy the product as buyer
     start_cheat_caller_address(contract_instance.contract_address, buyer);
     let total_cost = contract_instance.buy_product(purchases);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Verify the total cost is correct (5 * 10 = 50)
     assert(total_cost == 50, 'Incorrect total cost');
-    
+
     // Verify the product stock was updated
     let product = contract_instance.get_product_by_id(1);
     assert(product.stock == 90, 'Stock not updated correctly');
-    
+
     // Check buyer's balance after purchase
     let balance_after = token_dispatcher.balance_of(buyer);
     let expected_balance = balance_before - total_cost.into();
     assert(balance_after == expected_balance, 'Token not deducted correctly');
-    
+
     // Check contract's token balance
     let contract_balance = token_dispatcher.balance_of(contract_address);
     assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
@@ -1348,7 +1362,7 @@ fn test_buy_product_when_paused() {
 
 // test buy product with insufficient balance
 #[test]
-#[should_panic(expected: 'Insufficient balance')]
+#[should_panic(expected: 'INSUFFICIENT_STRK_BALANCE')]
 fn test_buy_product_with_insufficient_balance() {
     // Deploy contracts
     let (contract_address, owner, token_address) = setup_with_token();
@@ -1367,21 +1381,21 @@ fn test_buy_product_with_insufficient_balance() {
     start_cheat_caller_address(contract_instance.contract_address, owner);
     contract_instance.add_product(name, price, stock, description, category, image);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Create a buyer address with no tokens
     let buyer_felt: felt252 = 0003.into();
     let buyer: ContractAddress = buyer_felt.try_into().unwrap();
-    
+
     // Buyer approves the contract to spend their tokens (even though they have none)
     start_cheat_caller_address(token_address, buyer);
     token_dispatcher.approve(contract_address, 1000_u256);
     stop_cheat_caller_address(token_address);
-    
+
     // Create a purchase array with one item
     let mut purchases = array![];
     let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
     purchases.append(purchase_item);
-    
+
     // Buy the product as buyer - this should fail with 'Insufficient balance'
     start_cheat_caller_address(contract_instance.contract_address, buyer);
     contract_instance.buy_product(purchases);
@@ -1410,46 +1424,46 @@ fn test_withdraw_funds() {
     start_cheat_caller_address(contract_instance.contract_address, owner);
     contract_instance.add_product(name, price, stock, description, category, image);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Create a buyer address
     let buyer_felt: felt252 = 0003.into();
     let buyer: ContractAddress = buyer_felt.try_into().unwrap();
-    
+
     // Transfer tokens from owner to buyer instead of minting
     start_cheat_caller_address(token_address, owner);
     token_dispatcher.transfer(buyer, 1000_u256);
     stop_cheat_caller_address(token_address);
-    
+
     // Buyer approves the contract to spend their tokens
     start_cheat_caller_address(token_address, buyer);
     token_dispatcher.approve(contract_address, 1000_u256);
     stop_cheat_caller_address(token_address);
-    
+
     // Create a purchase array with one item
     let mut purchases = array![];
     let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
     purchases.append(purchase_item);
-    
+
     // Check buyer's balance before purchase
     let balance_before = token_dispatcher.balance_of(buyer);
-    
+
     // Buy the product as buyer
     start_cheat_caller_address(contract_instance.contract_address, buyer);
     let total_cost = contract_instance.buy_product(purchases);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Verify the total cost is correct (56 * 10 = 560)
     assert(total_cost == 560, 'Incorrect total cost');
-    
+
     // Verify the product stock was updated
     let product = contract_instance.get_product_by_id(1);
     assert(product.stock == 90, 'Stock not updated correctly');
-    
+
     // Check buyer's balance after purchase
     let balance_after = token_dispatcher.balance_of(buyer);
     let expected_balance = balance_before - total_cost.into();
     assert(balance_after == expected_balance, 'Token not deducted correctly');
-    
+
     // Check contract's token balance
     let contract_balance = token_dispatcher.balance_of(contract_address);
     assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
@@ -1488,46 +1502,46 @@ fn test_withdraw_funds_with_insufficient_balance() {
     start_cheat_caller_address(contract_instance.contract_address, owner);
     contract_instance.add_product(name, price, stock, description, category, image);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Create a buyer address
     let buyer_felt: felt252 = 0003.into();
     let buyer: ContractAddress = buyer_felt.try_into().unwrap();
-    
+
     // Transfer tokens from owner to buyer instead of minting
     start_cheat_caller_address(token_address, owner);
     token_dispatcher.transfer(buyer, 1000_u256);
     stop_cheat_caller_address(token_address);
-    
+
     // Buyer approves the contract to spend their tokens
     start_cheat_caller_address(token_address, buyer);
     token_dispatcher.approve(contract_address, 1000_u256);
     stop_cheat_caller_address(token_address);
-    
+
     // Create a purchase array with one item
     let mut purchases = array![];
     let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
     purchases.append(purchase_item);
-    
+
     // Check buyer's balance before purchase
     let balance_before = token_dispatcher.balance_of(buyer);
-    
+
     // Buy the product as buyer
     start_cheat_caller_address(contract_instance.contract_address, buyer);
     let total_cost = contract_instance.buy_product(purchases);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Verify the total cost is correct (5 * 10 = 50)
     assert(total_cost == 50, 'Incorrect total cost');
-    
+
     // Verify the product stock was updated
     let product = contract_instance.get_product_by_id(1);
     assert(product.stock == 90, 'Stock not updated correctly');
-    
+
     // Check buyer's balance after purchase
     let balance_after = token_dispatcher.balance_of(buyer);
     let expected_balance = balance_before - total_cost.into();
     assert(balance_after == expected_balance, 'Token not deducted correctly');
-    
+
     // Check contract's token balance
     let contract_balance = token_dispatcher.balance_of(contract_address);
     assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
@@ -1566,46 +1580,46 @@ fn test_withdraw_funds_with_non_owner() {
     start_cheat_caller_address(contract_instance.contract_address, owner);
     contract_instance.add_product(name, price, stock, description, category, image);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Create a buyer address
     let buyer_felt: felt252 = 0003.into();
     let buyer: ContractAddress = buyer_felt.try_into().unwrap();
-    
+
     // Transfer tokens from owner to buyer instead of minting
     start_cheat_caller_address(token_address, owner);
     token_dispatcher.transfer(buyer, 1000_u256);
     stop_cheat_caller_address(token_address);
-    
+
     // Buyer approves the contract to spend their tokens
     start_cheat_caller_address(token_address, buyer);
     token_dispatcher.approve(contract_address, 1000_u256);
     stop_cheat_caller_address(token_address);
-    
+
     // Create a purchase array with one item
     let mut purchases = array![];
     let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
     purchases.append(purchase_item);
-    
+
     // Check buyer's balance before purchase
     let balance_before = token_dispatcher.balance_of(buyer);
-    
+
     // Buy the product as buyer
     start_cheat_caller_address(contract_instance.contract_address, buyer);
     let total_cost = contract_instance.buy_product(purchases);
     stop_cheat_caller_address(contract_instance.contract_address);
-    
+
     // Verify the total cost is correct (5 * 10 = 50)
     assert(total_cost == 50, 'Incorrect total cost');
-    
+
     // Verify the product stock was updated
     let product = contract_instance.get_product_by_id(1);
     assert(product.stock == 90, 'Stock not updated correctly');
-    
+
     // Check buyer's balance after purchase
     let balance_after = token_dispatcher.balance_of(buyer);
     let expected_balance = balance_before - total_cost.into();
     assert(balance_after == expected_balance, 'Token not deducted correctly');
-    
+
     // Check contract's token balance
     let contract_balance = token_dispatcher.balance_of(contract_address);
     assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
@@ -1626,3 +1640,500 @@ fn test_withdraw_funds_with_non_owner() {
     let contract_balance = token_dispatcher.balance_of(contract_address);
     assert(contract_balance == 0, 'Withdraw failed');
 }
+
+
+// test add reward tier by owner
+#[test]
+fn test_add_reward_tier_by_owner() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Verify reward tier was added
+    let reward_tier = contract_instance.get_reward_tier_count();
+    assert(reward_tier == 1, 'Reward tier not added correctly');
+}
+
+// test add reward tier by admin should panic
+#[test]
+#[should_panic(expected: 'Not authorized')]
+fn test_add_reward_tier_by_admin() {
+    let (contract_address, _, admin) = setup_with_admin();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as admin
+    start_cheat_caller_address(contract_instance.contract_address, admin);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+    
+// test add reward tier by random address should panic
+#[test]
+#[should_panic(expected: 'Not authorized')]
+fn test_add_reward_tier_by_random_address() {
+    let (contract_address, _) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a random address
+    let random_felt: felt252 = 00077.into();
+    let random: ContractAddress = random_felt.try_into().unwrap();
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as random
+    start_cheat_caller_address(contract_instance.contract_address, random);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// test add reward tier events
+#[test]
+fn test_add_reward_tier_events() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // spy events
+    let mut spy = spy_events();
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Get the emitted events
+    let events = spy.get_events();
+    assert(events.events.len() > 0, 'No events were emitted');
+
+    // Verify the event came from our contract
+    let events_from_contract = events.emitted_by(contract_address);
+    assert(events_from_contract.events.len() > 0, 'No events from contract');
+
+    // Check that the event has the correct key (event name)
+    let (_, event) = events_from_contract.events.at(0);
+    println!("Event keys: {}", event.keys.len());
+    println!("Event data: {}", event.data.len());
+    println!("Event name: {}", event.keys.at(0));
+    assert(event.keys.len() > 0, 'Event has no keys');
+
+    // Get the selector for RewardTierAdded
+    let reward_tier_added_selector = selector!("RewardTierAdded");
+    println!("Expected selector: {}", reward_tier_added_selector);
+
+    // Compare the event key with the selector
+    assert(*event.keys.at(0) == reward_tier_added_selector, 'Wrong event name');
+
+    // Check that the event data contains the correct reward tier ID
+    assert(event.data.len() > 0, 'Event has no data');
+    assert(event.data.at(0) == @1.into(), 'Reward tier ID should be 1');
+}
+
+// test add reward tier when contract is paused should panic
+#[test]
+#[should_panic(expected: 'Pausable: paused')]
+fn test_add_reward_tier_when_contract_is_paused() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Pause the contract
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.pause_contract();
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// ******** TEST UPDATE REWARD TIER ********
+// test update reward tier by owner
+#[test]
+fn test_update_reward_tier_by_owner() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // update reward tier
+    let updated_name: felt252 = 'Silver';
+    let updated_description: ByteArray = "Silver reward tier";
+    let updated_threshold: u32 = 200;
+    let updated_image_uri: ByteArray = "silverimage";
+
+    // Update reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.update_reward_tier(1, updated_name, updated_description.clone(), updated_threshold, updated_image_uri.clone());
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Get the updated reward tier
+    let reward_tier = contract_instance.get_reward_tier_by_id(1);
+    assert(!reward_tier.is_none(), 'Reward tier not found');
+    let unwrapped_tier = reward_tier.unwrap();
+    assert(unwrapped_tier.name == updated_name, 'Name not updated');
+    assert(unwrapped_tier.description == updated_description, 'Description not updated');
+    assert(unwrapped_tier.threshold == updated_threshold, 'Threshold not updated');
+    assert(unwrapped_tier.image_uri == updated_image_uri, 'Image URI not updated');
+}
+
+
+// test update reward tier by admin should panic
+#[test]
+#[should_panic(expected: 'Not authorized')]
+fn test_update_reward_tier_by_admin() {
+    let (contract_address, _, admin) = setup_with_admin();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, admin);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // update reward tier
+    let updated_name: felt252 = 'Silver';
+    let updated_description: ByteArray = "Silver reward tier";
+    let updated_threshold: u32 = 200;
+    let updated_image_uri: ByteArray = "silverimage";
+
+    // Update reward tier as admin
+    start_cheat_caller_address(contract_instance.contract_address, admin);
+    contract_instance.update_reward_tier(1, updated_name, updated_description.clone(), updated_threshold, updated_image_uri.clone());
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// test update reward tier by random address should panic
+#[test]
+#[should_panic(expected: 'Not authorized')]
+fn test_update_reward_tier_by_random_address() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // random address
+    let random_felt: felt252 = 00077.into();
+    let random: ContractAddress = random_felt.try_into().unwrap();
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // update reward tier
+    let updated_name: felt252 = 'Silver';
+    let updated_description: ByteArray = "Silver reward tier";
+    let updated_threshold: u32 = 200;
+    let updated_image_uri: ByteArray = "silverimage";
+
+    // Update reward tier as random
+    start_cheat_caller_address(contract_instance.contract_address, random);
+    contract_instance.update_reward_tier(1, updated_name, updated_description.clone(), updated_threshold, updated_image_uri.clone());
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+
+// test update reward tier events
+#[test]
+fn test_update_reward_tier_events() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // update reward tier
+    let updated_name: felt252 = 'Silver';
+    let updated_description: ByteArray = "Silver reward tier";
+    let updated_threshold: u32 = 200;
+    let updated_image_uri: ByteArray = "silverimage";
+
+    // spy events
+    let mut spy = spy_events();
+
+    // Update reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.update_reward_tier(1, updated_name, updated_description.clone(), updated_threshold, updated_image_uri.clone());
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Get the emitted events
+    let events = spy.get_events();
+    assert(events.events.len() > 0, 'No events were emitted');
+
+    // Verify the event came from our contract
+    let events_from_contract = events.emitted_by(contract_address);
+    assert(events_from_contract.events.len() > 0, 'No events from contract');
+
+    // Check that the event has the correct key (event name)
+    let (_, event) = events_from_contract.events.at(0);
+    println!("Event keys: {}", event.keys.len());
+    println!("Event data: {}", event.data.len());
+    println!("Event name: {}", event.keys.at(0));
+    assert(event.keys.len() > 0, 'Event has no keys');
+
+    // Get the selector for RewardTierUpdated
+    let reward_tier_updated_selector = selector!("RewardTierUpdated");
+    println!("Expected selector: {}", reward_tier_updated_selector);
+
+    // Compare the event key with the selector
+    assert(*event.keys.at(0) == reward_tier_updated_selector, 'Wrong event name');
+
+    // Check that the event data contains the correct reward tier ID
+    assert(event.data.len() > 0, 'Event has no data');
+    assert(event.data.at(0) == @1.into(), 'Reward tier ID should be 1');
+
+    // Verify reward tier was updated
+    let reward_tier = contract_instance.get_reward_tier_by_id(1);
+    assert(!reward_tier.is_none(), 'Reward tier not found');
+    let unwrapped_tier = reward_tier.unwrap();
+    assert(unwrapped_tier.name == updated_name, 'Name not updated');
+    assert(unwrapped_tier.description == updated_description, 'Description not updated');
+    assert(unwrapped_tier.threshold == updated_threshold, 'Threshold not updated');
+    assert(unwrapped_tier.image_uri == updated_image_uri, 'Image URI not updated');
+}
+
+// test update reward tier when contract is paused should panic
+#[test]
+#[should_panic(expected: 'Pausable: paused')]
+fn test_update_reward_tier_when_contract_is_paused() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Pause the contract
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.pause_contract();
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // update reward tier
+    let updated_name: felt252 = 'Silver';
+    let updated_description: ByteArray = "Silver reward tier";
+    let updated_threshold: u32 = 200;
+    let updated_image_uri: ByteArray = "silverimage";
+
+    // Update reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.update_reward_tier(1, updated_name, updated_description.clone(), updated_threshold, updated_image_uri.clone());
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+
+// ********* TEST DELETE REWARD TIER *********
+// test delete reward tier by owner
+#[test]
+fn test_delete_reward_tier_by_owner() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Delete reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.delete_reward_tier(1);
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// test delete reward tier by admin should panic
+#[test]
+#[should_panic(expected: 'Not authorized')]
+fn test_delete_reward_tier_by_admin() {
+    let (contract_address, owner, admin) = setup_with_admin();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Delete reward tier as admin
+    start_cheat_caller_address(contract_instance.contract_address, admin);
+    contract_instance.delete_reward_tier(1);
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+
+// test delete reward tier with random address should panic
+#[test]
+#[should_panic(expected: 'Not authorized')]
+fn test_delete_reward_tier_with_random_address() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Delete reward tier with random address
+    let random_felt: felt252 = 00077.into();
+    let random: ContractAddress = random_felt.try_into().unwrap();
+    start_cheat_caller_address(contract_instance.contract_address, random);
+    contract_instance.delete_reward_tier(1);
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+    
+// test delete reward tier when contract is paused should panic
+#[test]
+#[should_panic(expected: 'Pausable: paused')]
+fn test_delete_reward_tier_when_contract_is_paused() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Pause the contract
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.pause_contract();
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Delete reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.delete_reward_tier(1);
+    stop_cheat_caller_address(contract_instance.contract_address);
+}
+
+// test delete reward tier event
+#[test]
+fn test_delete_reward_tier_event() {
+    let (contract_address, owner) = setup();
+    let contract_instance = ISuperMarketDispatcher { contract_address };
+
+    // Create a reward tier
+    let name: felt252 = 'Gold';
+    let description: ByteArray = "Gold reward tier";
+    let threshold: u32 = 100;
+    let image_uri: ByteArray = "goldimage";
+
+    // Add reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.add_reward_tier(name, description, threshold, image_uri);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // spy events
+    let mut spy = spy_events();
+
+    // Delete reward tier as owner
+    start_cheat_caller_address(contract_instance.contract_address, owner);
+    contract_instance.delete_reward_tier(1);
+    stop_cheat_caller_address(contract_instance.contract_address);
+
+    // Get events
+    let events_from_contract = spy.get_events();
+    assert(events_from_contract.events.len() > 0, 'No events were emitted');
+
+    // Verify the event came from our contract
+    let events_from_contract = events_from_contract.emitted_by(contract_address);
+    assert(events_from_contract.events.len() > 0, 'No events from contract');
+
+    // Check that the event has the correct key (event name)
+    let (_, event) = events_from_contract.events.at(0);
+    assert(event.keys.len() > 0, 'Event has no keys');
+
+    // Get the selector for RewardTierDeleted
+    let reward_tier_deleted_selector = selector!("RewardTierDeleted");
+    println!("Expected selector: {}", reward_tier_deleted_selector);
+
+    // Compare the event key with the selector
+    assert(*event.keys.at(0) == reward_tier_deleted_selector, 'Wrong event name');
+
+    // Check that the event data contains the correct reward tier ID
+    assert(event.data.len() > 0, 'Event has no data');
+    assert(event.data.at(0) == @1.into(), 'Reward tier ID should be 1');
+}
+

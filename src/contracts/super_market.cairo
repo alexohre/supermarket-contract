@@ -12,7 +12,7 @@ const STARKNET_TOKEN_ADDRESS: felt252 =
 #[starknet::contract]
 pub mod SuperMarketV1 {
     // Import conversion traits
-    use core::traits::{Into, TryInto};
+    use core::traits::Into;
     use openzeppelin::access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
     use openzeppelin::introspection::src5::SRC5Component;
     use openzeppelin::security::pausable::PausableComponent;
@@ -29,16 +29,15 @@ pub mod SuperMarketV1 {
     };
 
     // Import structs
-    use super_market::Structs::Structs::{Order, OrderItem, Product, PurchaseItem};
+    use super_market::Structs::Structs::{Order, OrderItem, Product, PurchaseItem, RewardTier};
     // import events
     use super_market::events::super_market_event::{
         AdminAdded, AdminRemoved, OwnershipTransferred, ProductCreated, ProductDeleted,
-        ProductPurchased, ProductUpdated,
+        ProductPurchased, ProductUpdated, RewardTierAdded, RewardTierDeleted, RewardTierUpdated,
     };
     // import interfaces
     use super_market::interfaces::ISuper_market::ISuperMarket;
-    use super::{ADMIN_ROLE, PAUSER_ROLE, UPGRADER_ROLE};
-    use super::*;
+    use super::{*, ADMIN_ROLE, PAUSER_ROLE, UPGRADER_ROLE};
 
     component!(path: PausableComponent, storage: pausable, event: PausableEvent);
     component!(path: AccessControlComponent, storage: accesscontrol, event: AccessControlEvent);
@@ -83,7 +82,14 @@ pub mod SuperMarketV1 {
         payment_token_address: ContractAddress, // Store the payment token address
         // Buyer order tracking
         buyer_order_count: Map<ContractAddress, u32>, // Track number of orders per buyer
-        buyer_orders: Map<(ContractAddress, u32), u32> // Map (buyer, index) to order_id
+        buyer_orders: Map<(ContractAddress, u32), u32>, // Map (buyer, index) to order_id
+        // NFT rewards system
+        reward_tiers: Map<u32, RewardTier>, // Store reward tiers
+        reward_tier_count: u32, // Track number of reward tiers
+        claimed_rewards: Map<
+            (ContractAddress, u32), bool,
+        >, // Track if a buyer has claimed a reward for an order
+        reward_nft_address: ContractAddress // Address of the NFT contract for rewards
     }
 
     #[event]
@@ -105,13 +111,17 @@ pub mod SuperMarketV1 {
         AdminAdded: AdminAdded,
         AdminRemoved: AdminRemoved,
         OwnershipTransferred: OwnershipTransferred,
+        RewardTierAdded: RewardTierAdded,
+        RewardTierUpdated: RewardTierUpdated,
+        RewardTierDeleted: RewardTierDeleted,
     }
 
     #[constructor]
     fn constructor(
-        ref self: ContractState, 
-        default_admin: ContractAddress, 
-        token_address: ContractAddress
+        ref self: ContractState,
+        default_admin: ContractAddress,
+        token_address: ContractAddress,
+        nft_address: ContractAddress,
     ) {
         self.accesscontrol.initializer();
 
@@ -119,16 +129,20 @@ pub mod SuperMarketV1 {
         self.accesscontrol._grant_role(DEFAULT_ADMIN_ROLE, default_admin);
         self.accesscontrol._grant_role(PAUSER_ROLE, default_admin);
         self.accesscontrol._grant_role(UPGRADER_ROLE, default_admin);
-        self.accesscontrol._grant_role(ADMIN_ROLE, default_admin);
+        // self.accesscontrol._grant_role(ADMIN_ROLE, default_admin);
 
         // Initialize marketplace state
         self.owner.write(default_admin);
         self.admin_count.write(0);
         self.next_id.write(0);
         self.total_sales.write(0);
-        
+        self.reward_tier_count.write(0);
+
         // Set the payment token address
         self.payment_token_address.write(token_address);
+
+        // Set the NFT reward contract address
+        self.reward_nft_address.write(nft_address);
     }
 
     // Internal implementation for contract functions
@@ -151,10 +165,10 @@ pub mod SuperMarketV1 {
         fn is_owner_or_admin(self: @ContractState, address: ContractAddress) -> bool {
             // Check if address is the owner (has DEFAULT_ADMIN_ROLE)
             let is_owner = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, address);
-            
+
             // Check if address has ADMIN_ROLE
             let is_admin = self.accesscontrol.has_role(ADMIN_ROLE, address);
-            
+
             // Return true if either condition is met
             is_owner || is_admin
         }
@@ -244,7 +258,7 @@ pub mod SuperMarketV1 {
             let caller = get_caller_address();
             let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
             assert(has_default_admin_role, 'Caller is not the admin');
-            
+
             // Call the internal pause function
             self.pausable.pause();
         }
@@ -254,7 +268,7 @@ pub mod SuperMarketV1 {
             let caller = get_caller_address();
             let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
             assert(has_default_admin_role, 'Caller is not the admin');
-            
+
             // Call the internal unpause function
             self.pausable.unpause();
         }
@@ -550,10 +564,10 @@ pub mod SuperMarketV1 {
         fn get_product_by_id(self: @ContractState, id: u32) -> Product {
             // Check if the product exists - IDs start at 1
             assert(id > 0 && id <= self.next_id.read(), 'Product not found');
-            
+
             // Retrieve the product from storage
             let product = self.products.read(id);
-            
+
             // Return the product
             product
         }
@@ -607,7 +621,7 @@ pub mod SuperMarketV1 {
 
             // Check if buyer has enough balance
             let buyer_balance = token_dispatcher.balance_of(buyer);
-            assert(buyer_balance >= total_cost_u256, 'Insufficient balance');
+            assert(buyer_balance >= total_cost_u256, 'INSUFFICIENT_STRK_BALANCE');
 
             // Transfer tokens from buyer to contract
             token_dispatcher.transfer_from(buyer, contract_address, total_cost_u256);
@@ -624,7 +638,12 @@ pub mod SuperMarketV1 {
 
             // Create new order
             let order = Order {
-                id: order_id, trans_id: trans_id, buyer, total_cost, timestamp, items_count: purchases_len,
+                id: order_id,
+                trans_id: trans_id,
+                buyer,
+                total_cost,
+                timestamp,
+                items_count: purchases_len,
             };
 
             // Store the order
@@ -654,7 +673,7 @@ pub mod SuperMarketV1 {
 
             // Update order count
             self.order_count.write(order_id);
-            
+
             // Update buyer's order count and store order ID in buyer's orders
             let buyer_order_count = self.buyer_order_count.read(buyer);
             self.buyer_orders.write((buyer, buyer_order_count), order_id);
@@ -699,10 +718,9 @@ pub mod SuperMarketV1 {
             let caller = get_caller_address();
             let order = self.orders.read(order_id);
 
-            assert(
-                caller == order.buyer || caller == self.owner.read() || self.admins.read(caller),
-                'Unauthorized',
-            );
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
+            assert(has_default_admin_role || has_admin_role, 'Unauthorized');
 
             let items_count = order.items_count;
             let mut items = ArrayTrait::new();
@@ -717,8 +735,8 @@ pub mod SuperMarketV1 {
             items
         }
 
-        // New function to get all orders (admin only)
-        fn get_all_orders(self: @ContractState) -> Array<Order> {
+        // New function to get all orders with their items (admin only)
+        fn get_all_orders_with_items(self: @ContractState) -> Array<(Order, Array<OrderItem>)> {
             // Check if caller has ADMIN_ROLE or DEFAULT_ADMIN_ROLE
             let caller = get_caller_address();
             let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
@@ -726,46 +744,294 @@ pub mod SuperMarketV1 {
             assert(has_admin_role || has_default_admin_role, 'Not authorized');
 
             let order_count = self.order_count.read();
-            let mut orders = ArrayTrait::new();
+            let mut orders_with_items = ArrayTrait::new();
 
             let mut i: u32 = 1;
             while i != order_count + 1 { // stop when i == order_count + 1
                 let order = self.orders.read(i);
-                orders.append(order);
+                let items = self.get_order_items(i);
+                let order_with_items = (order, items);
+                orders_with_items.append(order_with_items);
                 i = i + 1;
             }
 
-            orders
+            orders_with_items
         }
-        
+
         // Get the number of orders for a specific buyer
         fn get_buyer_order_count(self: @ContractState, buyer: ContractAddress) -> u32 {
             // Simply read the count from storage instead of scanning all orders
             self.buyer_order_count.read(buyer)
         }
-        
+
         // Get all orders with their items for a specific buyer
-        fn get_buyer_orders_with_items(self: @ContractState, buyer: ContractAddress) -> Array<(Order, Array<OrderItem>)> {
+        fn get_buyer_orders_with_items(
+            self: @ContractState, buyer: ContractAddress,
+        ) -> Array<(Order, Array<OrderItem>)> {
             let buyer_order_count = self.buyer_order_count.read(buyer);
             let mut orders_with_items = ArrayTrait::new();
-            
+
             let mut i: u32 = 0;
             while i != buyer_order_count {
                 // Get the order
                 let order_id = self.buyer_orders.read((buyer, i));
                 let order = self.orders.read(order_id);
-                
+
                 // Get the items for this order
                 let items = self.get_order_items(order_id);
-                
+
                 // Create a tuple of (order, items) and add it to the result array
                 let order_with_items = (order, items);
                 orders_with_items.append(order_with_items);
-                
+
                 i = i + 1;
             }
-            
+
             orders_with_items
+        }
+
+        // Add a reward tier (owner only)
+        fn add_reward_tier(
+            ref self: ContractState,
+            name: felt252,
+            description: ByteArray,
+            threshold: u32,
+            image_uri: ByteArray,
+        ) -> u32 {
+            // Check if contract is paused
+            self.pausable.assert_not_paused();
+
+            // Check if caller has DEFAULT_ADMIN_ROLE
+            let caller = get_caller_address();
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_default_admin_role, 'Not authorized');
+
+            // Get next reward tier ID
+            let id = self.reward_tier_count.read();
+
+            let new_id = id + 1;
+            // Clone ByteArrays for storage and event
+            let cloned_description = description.clone();
+            let cloned_image_uri = image_uri.clone();
+
+            // Create reward tier and store it
+            let reward_tier = RewardTier { 
+                id: new_id, 
+                name, 
+                description: description, 
+                threshold, 
+                image_uri: image_uri 
+            };
+            self.reward_tiers.write(new_id, reward_tier);
+
+            // Increment reward tier count
+            self.reward_tier_count.write(new_id);
+
+            // Emit event with original ByteArrays
+            self.emit(Event::RewardTierAdded(RewardTierAdded { 
+                id: new_id, 
+                name, 
+                description: cloned_description, 
+                threshold, 
+                image_uri: cloned_image_uri
+            }));
+
+            id
+        }
+
+        // update tier by id
+        fn update_reward_tier(
+            ref self: ContractState,
+            id: u32,
+            name: felt252,
+            description: ByteArray,
+            threshold: u32,
+            image_uri: ByteArray,
+        ) {
+            // Check if contract is paused
+            self.pausable.assert_not_paused();
+
+            // Check if caller has DEFAULT_ADMIN_ROLE
+            let caller = get_caller_address();
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_default_admin_role, 'Not authorized');
+
+            // Check if the reward tier exists
+            let reward_tier = self.reward_tiers.read(id);
+            assert(reward_tier.id == id, 'Reward tier does not exist');
+
+            // clone ByteArrays for storage and event
+            let cloned_description = description.clone();
+            let cloned_image_uri = image_uri.clone();
+
+            // Update reward tier
+            let updated_reward_tier = RewardTier { 
+                id, 
+                name, 
+                description, 
+                threshold, 
+                image_uri 
+            };
+            self.reward_tiers.write(id, updated_reward_tier);
+
+            // Emit event with original ByteArrays
+            self.emit(Event::RewardTierUpdated(RewardTierUpdated { 
+                id, 
+                name, 
+                description: cloned_description, 
+                threshold, 
+                image_uri: cloned_image_uri
+            }));
+        }
+
+        // delete tier by id
+        fn delete_reward_tier(ref self: ContractState, id: u32) {
+            // Check if contract is paused
+            self.pausable.assert_not_paused();
+
+            // Check if caller has DEFAULT_ADMIN_ROLE
+            let caller = get_caller_address();
+            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            assert(has_default_admin_role, 'Not authorized');
+
+            // Check if the reward tier exists
+            let reward_tier = self.reward_tiers.read(id);
+            assert(reward_tier.id == id, 'Reward tier does not exist');
+
+            // Delete the reward tier
+            self.reward_tiers.write(id, RewardTier { id: 0, name: 0, description: "", threshold: 0, image_uri: "" });
+
+            // Emit event
+            self.emit(Event::RewardTierDeleted(RewardTierDeleted { id }));
+        }
+
+        // Get all reward tiers
+        fn get_reward_tiers(self: @ContractState) -> Array<RewardTier> {
+            let reward_tier_count = self.reward_tier_count.read();
+            let mut reward_tiers = ArrayTrait::new();
+
+            let mut i: u32 = 0;
+            while i != reward_tier_count {
+                let reward_tier = self.reward_tiers.read(i);
+                reward_tiers.append(reward_tier);
+                i = i + 1;
+            }
+
+            reward_tiers
+        }
+
+        // Get the number of reward tiers
+        fn get_reward_tier_count(self: @ContractState) -> u32 {
+            self.reward_tier_count.read()
+        }
+
+        fn get_reward_tier_by_id(self: @ContractState, id: u32) -> Option<RewardTier> {
+            let reward_tier = self.reward_tiers.read(id);
+            if reward_tier.id == id {
+                return Option::Some(reward_tier);
+            }
+            Option::None
+        }
+
+        // Get order by transaction ID
+        fn get_order_by_transaction_id(self: @ContractState, trans_id: felt252) -> Option<Order> {
+            let order_count = self.order_count.read();
+
+            let mut i: u32 = 1;
+            while i != order_count + 1 {
+                let order = self.orders.read(i);
+                if order.trans_id == trans_id {
+                    return Option::Some(order);
+                }
+                i = i + 1;
+            }
+
+            Option::None
+        }
+
+        // Check if a buyer is eligible for a reward based on transaction ID
+        fn check_reward_eligibility(self: @ContractState, trans_id: felt252) -> Option<RewardTier> {
+            // Get the order by transaction ID
+            let maybe_order = self.get_order_by_transaction_id(trans_id);
+
+            // If order doesn't exist, return None
+            if maybe_order.is_none() {
+                return Option::None;
+            }
+
+            let order = maybe_order.unwrap();
+            let total_cost = order.total_cost;
+
+            // Check if the buyer has already claimed a reward for this order
+            let already_claimed = self.claimed_rewards.read((order.buyer, order.id));
+            if already_claimed {
+                return Option::None;
+            }
+
+            // Find the highest tier the order qualifies for
+            let reward_tier_count = self.reward_tier_count.read();
+            let mut highest_eligible_tier_id: Option<u32> = Option::None;
+            let mut highest_threshold: u32 = 0;
+
+            let mut i: u32 = 0;
+            while i != reward_tier_count {
+                let tier = self.reward_tiers.read(i);
+
+                // Combine conditions to reduce nesting - only update if:
+                // 1. The order total meets or exceeds the threshold AND
+                // 2. Either we haven't found an eligible tier yet OR this tier has a higher
+                // threshold
+                if total_cost >= tier.threshold
+                    && (highest_eligible_tier_id.is_none() || tier.threshold > highest_threshold) {
+                    highest_eligible_tier_id = Option::Some(tier.id);
+                    highest_threshold = tier.threshold;
+                }
+
+                i = i + 1;
+            }
+
+            // If no eligible tier found, return None
+            if highest_eligible_tier_id.is_none() {
+                return Option::None;
+            }
+
+            // Return the highest eligible tier
+            let tier_id = highest_eligible_tier_id.unwrap();
+            let tier = self.reward_tiers.read(tier_id);
+            Option::Some(tier)
+        }
+
+        // Claim a reward for an order
+        fn claim_reward(ref self: ContractState, trans_id: felt252) -> u32 {
+            // Check if contract is paused
+            self.pausable.assert_not_paused();
+
+            // Get the caller address
+            let caller = get_caller_address();
+
+            // Check eligibility
+            let maybe_eligible_tier = self.check_reward_eligibility(trans_id);
+            assert(!maybe_eligible_tier.is_none(), 'Not eligible for reward');
+
+            // Safely unwrap the eligible tier
+            let eligible_tier = maybe_eligible_tier.unwrap();
+            let tier_id = eligible_tier.id;
+
+            // Get the order
+            let maybe_order = self.get_order_by_transaction_id(trans_id);
+            let order = maybe_order.unwrap();
+
+            // Verify the caller is the buyer
+            assert(caller == order.buyer, 'Only buyer can claim reward');
+
+            // Mark the reward as claimed
+            self.claimed_rewards.write((order.buyer, order.id), true);
+
+            // TODO: Mint the NFT to the buyer
+            // This would typically call an external NFT contract
+            // For now, we'll just return the reward tier ID
+
+            tier_id
         }
     }
 }

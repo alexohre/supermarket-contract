@@ -1,5 +1,5 @@
 use starknet::ContractAddress;
-use super_market::Structs::Structs::{Order, OrderItem, Product, PurchaseItem};
+use super_market::Structs::Structs::{Order, OrderItem, Product, PurchaseItem, RewardTier};
 
 #[starknet::interface]
 pub trait ISuperMarket<TContractState> {
@@ -76,12 +76,55 @@ pub trait ISuperMarket<TContractState> {
     // get order items
     fn get_order_items(self: @TContractState, order_id: u32) -> Array<OrderItem>;
 
-    // get all orders
-    fn get_all_orders(self: @TContractState) -> Array<Order>;
-    
+    // get all orders with items
+    fn get_all_orders_with_items(self: @TContractState) -> Array<(Order, Array<OrderItem>)>;
+
     // Get the number of orders for a specific buyer
     fn get_buyer_order_count(self: @TContractState, buyer: ContractAddress) -> u32;
-    
+
     // Get all orders with their items for a specific buyer
-    fn get_buyer_orders_with_items(self: @TContractState, buyer: ContractAddress) -> Array<(Order, Array<OrderItem>)>;
+    // Returns an array of tuples, each containing an order and its items
+    fn get_buyer_orders_with_items(
+        self: @TContractState, buyer: ContractAddress,
+    ) -> Array<(Order, Array<OrderItem>)>;
+
+    // Get the number of reward tiers
+    fn get_reward_tier_count(self: @TContractState) -> u32;
+
+    // Add a reward tier (admin only)
+    fn add_reward_tier(
+        ref self: TContractState,
+        name: felt252,
+        description: ByteArray,
+        threshold: u32,
+        image_uri: ByteArray,
+    ) -> u32;
+
+    // update tier by id
+    fn update_reward_tier(
+        ref self: TContractState,
+        id: u32,
+        name: felt252,
+        description: ByteArray,
+        threshold: u32,
+        image_uri: ByteArray,
+    );
+
+    // delete tier by id
+    fn delete_reward_tier(ref self: TContractState, id: u32);
+
+    // Get reward tier by id
+    fn get_reward_tier_by_id(self: @TContractState, id: u32) -> Option<RewardTier>;
+
+    // Get all reward tiers
+    fn get_reward_tiers(self: @TContractState) -> Array<RewardTier>;
+
+    // Get order by transaction ID
+    fn get_order_by_transaction_id(self: @TContractState, trans_id: felt252) -> Option<Order>;
+
+    // Check if a buyer is eligible for a reward based on transaction ID
+    fn check_reward_eligibility(self: @TContractState, trans_id: felt252) -> Option<RewardTier>;
+
+    // Claim a reward for an order
+    fn claim_reward(ref self: TContractState, trans_id: felt252) -> u32;
 }
