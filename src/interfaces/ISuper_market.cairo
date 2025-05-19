@@ -16,6 +16,9 @@ pub trait ISuperMarket<TContractState> {
     // is admin
     fn is_admin(self: @TContractState, address: ContractAddress) -> bool;
 
+    // is owner or admin
+    fn is_owner_or_admin(self: @TContractState, address: ContractAddress) -> bool;
+
     // get owner
     fn get_owner(self: @TContractState) -> ContractAddress;
 
@@ -88,6 +91,9 @@ pub trait ISuperMarket<TContractState> {
         self: @TContractState, buyer: ContractAddress,
     ) -> Array<(Order, Array<OrderItem>)>;
 
+    // Calculate the token amount needed for a purchase
+    fn calculate_token_amount(self: @TContractState, purchases: Array<PurchaseItem>) -> u256;
+
     // Get the number of reward tiers
     fn get_reward_tier_count(self: @TContractState) -> u32;
 
@@ -120,7 +126,7 @@ pub trait ISuperMarket<TContractState> {
     fn get_reward_tiers(self: @TContractState) -> Array<RewardTier>;
 
     // Get order by transaction ID
-    fn get_order_by_transaction_id(self: @TContractState, trans_id: felt252) -> Option<Order>;
+    fn get_order_by_trans_id(self: @TContractState, trans_id: felt252) -> Option<Order>;
 
     // Check if a buyer is eligible for a reward based on transaction ID
     fn check_reward_eligibility(self: @TContractState, trans_id: felt252) -> Option<RewardTier>;

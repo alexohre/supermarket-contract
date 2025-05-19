@@ -75,7 +75,11 @@ mod SuperMarketNft {
 
     #[constructor]
     fn constructor(ref self: ContractState, owner: ContractAddress) {
-        self.erc721.initializer("SuperMarketNft", "SNFT", "");
+        self
+            .erc721
+            .initializer(
+                "SuperMarketNft", "SNFT", "https://coral-chemical-peacock-81.mypinata.cloud/ipfs/",
+            );
         self.ownable.initializer(owner);
         self.erc721_enumerable.initializer();
     }

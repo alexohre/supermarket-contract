@@ -13,6 +13,10 @@ const ADMIN_ROLE: felt252 = selector!("ADMIN_ROLE");
 const PAUSER_ROLE: felt252 = selector!("PAUSER_ROLE");
 const UPGRADER_ROLE: felt252 = selector!("UPGRADER_ROLE");
 
+// Decimal scaling factor for price representation
+// 1000 means prices are stored with 3 decimal places (e.g., 2343 = 2.343)
+const PRICE_SCALING_FACTOR: u32 = 1000;
+
 // Setup function that returns contract address and owner address
 fn setup() -> (ContractAddress, ContractAddress) {
     // Create owner address using TryInto
@@ -34,7 +38,7 @@ fn setup() -> (ContractAddress, ContractAddress) {
     ]).unwrap();
 
     // Deploy super market contract
-    let contract_class = declare("SuperMarketV1").unwrap().contract_class();
+    let contract_class = declare("SuperMarketV0").unwrap().contract_class();
     // Deploy with owner address as the default_admin parameter and token address for payments
     let (contract_address, _) = contract_class
         .deploy(@array![owner.into(), token_address.into(), nft_address.into()])
@@ -83,7 +87,7 @@ fn setup_with_token() -> (ContractAddress, ContractAddress, ContractAddress) {
     ]).unwrap();
 
     // Deploy super market contract
-    let contract_class = declare("SuperMarketV1").unwrap().contract_class();
+    let contract_class = declare("SuperMarketV1_0").unwrap().contract_class();
     // Deploy with owner address as the default_admin parameter and token address for payments
     let (contract_address, _) = contract_class
         .deploy(@array![owner.into(), token_address.into(), nft_address.into()])
@@ -1234,7 +1238,7 @@ fn test_buy_product_with_token() {
 
     // First add a product as owner
     let name: felt252 = 'Apple';
-    let price: u32 = 5;
+    let price: u32 = 5000;
     let stock: u32 = 100;
     let description: ByteArray = "Fresh red apples";
     let category: felt252 = 'fruit';
@@ -1266,14 +1270,15 @@ fn test_buy_product_with_token() {
 
     // Check buyer's balance before purchase
     let balance_before = token_dispatcher.balance_of(buyer);
+    println!("buyer balance before purchase: {}", balance_before);
 
     // Buy the product as buyer
     start_cheat_caller_address(contract_instance.contract_address, buyer);
     let total_cost = contract_instance.buy_product(purchases);
     stop_cheat_caller_address(contract_instance.contract_address);
 
-    // Verify the total cost is correct (5 * 10 = 50)
-    assert(total_cost == 50, 'Incorrect total cost');
+    // Verify the total cost is correct (5000 * 10 = 50000)
+    assert(total_cost == 50000, 'Incorrect total cost');
 
     // Verify the product stock was updated
     let product = contract_instance.get_product_by_id(1);
@@ -1281,12 +1286,19 @@ fn test_buy_product_with_token() {
 
     // Check buyer's balance after purchase
     let balance_after = token_dispatcher.balance_of(buyer);
-    let expected_balance = balance_before - total_cost.into();
+    println!("buyer balance after purchase: {}", balance_after);
+    // Divide by PRICE_SCALING_FACTOR to match the contract's behavior
+    let total_cost_divided = total_cost / PRICE_SCALING_FACTOR;
+    println!("Total cost divided: {}", total_cost_divided);
+
+    let expected_balance = balance_before - total_cost_divided.into();
+    println!("Expected balance = balance_before - total_cost_divided {}", expected_balance);
     assert(balance_after == expected_balance, 'Token not deducted correctly');
 
     // Check contract's token balance
     let contract_balance = token_dispatcher.balance_of(contract_address);
-    assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
+    // Divide by PRICE_SCALING_FACTOR to match the contract's behavior
+    assert(contract_balance == total_cost_divided.into(), 'Contract did not receive tokens');
 }
 
 // Test buy product when contract is paused
@@ -1371,7 +1383,7 @@ fn test_buy_product_with_insufficient_balance() {
 
     // First add a product as owner
     let name: felt252 = 'Apple';
-    let price: u32 = 5;
+    let price: u32 = 5000;
     let stock: u32 = 100;
     let description: ByteArray = "Fresh red apples";
     let category: felt252 = 'fruit';
@@ -1407,14 +1419,14 @@ fn test_buy_product_with_insufficient_balance() {
 // Test withdraw funds with default admin role (owner)
 #[test]
 fn test_withdraw_funds() {
-    // deploy contracts
+    // Deploy contracts
     let (contract_address, owner, token_address) = setup_with_token();
     let contract_instance = ISuperMarketDispatcher { contract_address };
     let token_dispatcher = IERC20Dispatcher { contract_address: token_address };
 
     // First add a product as owner
     let name: felt252 = 'Apple';
-    let price: u32 = 56;
+    let price: u32 = 5000; // 5.000 with scaling factor 1000
     let stock: u32 = 100;
     let description: ByteArray = "Fresh red apples";
     let category: felt252 = 'fruit';
@@ -1429,14 +1441,15 @@ fn test_withdraw_funds() {
     let buyer_felt: felt252 = 0003.into();
     let buyer: ContractAddress = buyer_felt.try_into().unwrap();
 
-    // Transfer tokens from owner to buyer instead of minting
+    // Transfer MORE tokens to buyer - enough to cover the purchase
+    // 10 * 5000 / 1000 = 50 tokens needed
     start_cheat_caller_address(token_address, owner);
-    token_dispatcher.transfer(buyer, 1000_u256);
+    token_dispatcher.transfer(buyer, 100_u256); // Transfer 100 tokens
     stop_cheat_caller_address(token_address);
 
     // Buyer approves the contract to spend their tokens
     start_cheat_caller_address(token_address, buyer);
-    token_dispatcher.approve(contract_address, 1000_u256);
+    token_dispatcher.approve(contract_address, 100_u256);
     stop_cheat_caller_address(token_address);
 
     // Create a purchase array with one item
@@ -1452,8 +1465,8 @@ fn test_withdraw_funds() {
     let total_cost = contract_instance.buy_product(purchases);
     stop_cheat_caller_address(contract_instance.contract_address);
 
-    // Verify the total cost is correct (56 * 10 = 560)
-    assert(total_cost == 560, 'Incorrect total cost');
+    // Verify the total cost is correct (5000 * 10 = 50000)
+    assert(total_cost == 50000, 'Incorrect total cost');
 
     // Verify the product stock was updated
     let product = contract_instance.get_product_by_id(1);
@@ -1461,15 +1474,18 @@ fn test_withdraw_funds() {
 
     // Check buyer's balance after purchase
     let balance_after = token_dispatcher.balance_of(buyer);
-    let expected_balance = balance_before - total_cost.into();
+    // Divide by PRICE_SCALING_FACTOR when checking token balances
+    let expected_balance = balance_before - (total_cost / PRICE_SCALING_FACTOR).into();
     assert(balance_after == expected_balance, 'Token not deducted correctly');
 
     // Check contract's token balance
     let contract_balance = token_dispatcher.balance_of(contract_address);
-    assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
+    // Divide by PRICE_SCALING_FACTOR when checking token balances
+    assert(contract_balance == (total_cost / PRICE_SCALING_FACTOR).into(), 'Contract did not receive tokens');
 
     let to: ContractAddress = owner;
-    let amount: u256 = total_cost.into();
+    // Divide by PRICE_SCALING_FACTOR to get the actual token amount for withdrawal
+    let amount: u256 = (total_cost / PRICE_SCALING_FACTOR).into();
 
     // Withdraw funds as owner
     start_cheat_caller_address(contract_instance.contract_address, owner);
@@ -1492,7 +1508,7 @@ fn test_withdraw_funds_with_insufficient_balance() {
 
     // First add a product as owner
     let name: felt252 = 'Apple';
-    let price: u32 = 5;
+    let price: u32 = 5000;
     let stock: u32 = 100;
     let description: ByteArray = "Fresh red apples";
     let category: felt252 = 'fruit';
@@ -1507,14 +1523,14 @@ fn test_withdraw_funds_with_insufficient_balance() {
     let buyer_felt: felt252 = 0003.into();
     let buyer: ContractAddress = buyer_felt.try_into().unwrap();
 
-    // Transfer tokens from owner to buyer instead of minting
+    // Transfer tokens to buyer
     start_cheat_caller_address(token_address, owner);
-    token_dispatcher.transfer(buyer, 1000_u256);
+    token_dispatcher.transfer(buyer, 100_u256);
     stop_cheat_caller_address(token_address);
 
     // Buyer approves the contract to spend their tokens
     start_cheat_caller_address(token_address, buyer);
-    token_dispatcher.approve(contract_address, 1000_u256);
+    token_dispatcher.approve(contract_address, 100_u256);
     stop_cheat_caller_address(token_address);
 
     // Create a purchase array with one item
@@ -1522,41 +1538,23 @@ fn test_withdraw_funds_with_insufficient_balance() {
     let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
     purchases.append(purchase_item);
 
-    // Check buyer's balance before purchase
-    let balance_before = token_dispatcher.balance_of(buyer);
-
     // Buy the product as buyer
     start_cheat_caller_address(contract_instance.contract_address, buyer);
     let total_cost = contract_instance.buy_product(purchases);
     stop_cheat_caller_address(contract_instance.contract_address);
 
-    // Verify the total cost is correct (5 * 10 = 50)
-    assert(total_cost == 50, 'Incorrect total cost');
-
-    // Verify the product stock was updated
-    let product = contract_instance.get_product_by_id(1);
-    assert(product.stock == 90, 'Stock not updated correctly');
-
-    // Check buyer's balance after purchase
-    let balance_after = token_dispatcher.balance_of(buyer);
-    let expected_balance = balance_before - total_cost.into();
-    assert(balance_after == expected_balance, 'Token not deducted correctly');
-
-    // Check contract's token balance
-    let contract_balance = token_dispatcher.balance_of(contract_address);
-    assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
+    // Verify the total cost is correct (5000 * 10 = 50000)
+    assert(total_cost == 50000, 'Incorrect total cost');
 
     let to: ContractAddress = owner;
-    let amount: u256 = 5000_u256;
+    // Try to withdraw MORE than the available balance to trigger the error
+    // Available balance is total_cost / PRICE_SCALING_FACTOR = 50
+    let amount: u256 = (total_cost / PRICE_SCALING_FACTOR).into() * 2; // Try to withdraw 100 tokens
 
-    // Withdraw funds as owner
+    // Withdraw funds as owner - should panic with INSUFFICIENT_STRK_BALANCE
     start_cheat_caller_address(contract_instance.contract_address, owner);
     contract_instance.withdraw_funds(to, amount);
     stop_cheat_caller_address(contract_instance.contract_address);
-
-    // Check contract's token balance
-    let contract_balance = token_dispatcher.balance_of(contract_address);
-    assert(contract_balance == 0, 'Withdraw failed');
 }
 
 // test withdraw funds with non owner
@@ -1570,7 +1568,7 @@ fn test_withdraw_funds_with_non_owner() {
 
     // First add a product as owner
     let name: felt252 = 'Apple';
-    let price: u32 = 5;
+    let price: u32 = 5000;
     let stock: u32 = 100;
     let description: ByteArray = "Fresh red apples";
     let category: felt252 = 'fruit';
@@ -1585,14 +1583,14 @@ fn test_withdraw_funds_with_non_owner() {
     let buyer_felt: felt252 = 0003.into();
     let buyer: ContractAddress = buyer_felt.try_into().unwrap();
 
-    // Transfer tokens from owner to buyer instead of minting
+    // Transfer tokens to buyer
     start_cheat_caller_address(token_address, owner);
-    token_dispatcher.transfer(buyer, 1000_u256);
+    token_dispatcher.transfer(buyer, 100_u256);
     stop_cheat_caller_address(token_address);
 
     // Buyer approves the contract to spend their tokens
     start_cheat_caller_address(token_address, buyer);
-    token_dispatcher.approve(contract_address, 1000_u256);
+    token_dispatcher.approve(contract_address, 100_u256);
     stop_cheat_caller_address(token_address);
 
     // Create a purchase array with one item
@@ -1600,45 +1598,26 @@ fn test_withdraw_funds_with_non_owner() {
     let purchase_item = PurchaseItem { product_id: 1, quantity: 10 };
     purchases.append(purchase_item);
 
-    // Check buyer's balance before purchase
-    let balance_before = token_dispatcher.balance_of(buyer);
-
     // Buy the product as buyer
     start_cheat_caller_address(contract_instance.contract_address, buyer);
     let total_cost = contract_instance.buy_product(purchases);
     stop_cheat_caller_address(contract_instance.contract_address);
 
-    // Verify the total cost is correct (5 * 10 = 50)
-    assert(total_cost == 50, 'Incorrect total cost');
+    // Verify the total cost is correct (5000 * 10 = 50000)
+    assert(total_cost == 50000, 'Incorrect total cost');
 
-    // Verify the product stock was updated
-    let product = contract_instance.get_product_by_id(1);
-    assert(product.stock == 90, 'Stock not updated correctly');
-
-    // Check buyer's balance after purchase
-    let balance_after = token_dispatcher.balance_of(buyer);
-    let expected_balance = balance_before - total_cost.into();
-    assert(balance_after == expected_balance, 'Token not deducted correctly');
-
-    // Check contract's token balance
-    let contract_balance = token_dispatcher.balance_of(contract_address);
-    assert(contract_balance == total_cost.into(), 'Contract did not receive tokens');
-
-    // Create a random address
-    let random_felt: felt252 = 0003.into();
+    // Create a random address that is not the owner
+    let random_felt: felt252 = 00077.into(); // Use a different number than buyer
     let random: ContractAddress = random_felt.try_into().unwrap();
 
     let to: ContractAddress = random;
-    let amount: u256 = 5000_u256;
+    // Use a valid amount that won't cause overflow
+    let amount: u256 = (total_cost / PRICE_SCALING_FACTOR).into();
 
-    // Withdraw funds as owner
+    // Attempt withdrawal as non-owner - should panic with "Caller is not the admin"
     start_cheat_caller_address(contract_instance.contract_address, random);
     contract_instance.withdraw_funds(to, amount);
     stop_cheat_caller_address(contract_instance.contract_address);
-
-    // Check contract's token balance
-    let contract_balance = token_dispatcher.balance_of(contract_address);
-    assert(contract_balance == 0, 'Withdraw failed');
 }
 
 
@@ -1682,7 +1661,7 @@ fn test_add_reward_tier_by_admin() {
     contract_instance.add_reward_tier(name, description, threshold, image_uri);
     stop_cheat_caller_address(contract_instance.contract_address);
 }
-    
+
 // test add reward tier by random address should panic
 #[test]
 #[should_panic(expected: 'Not authorized')]
@@ -1803,7 +1782,14 @@ fn test_update_reward_tier_by_owner() {
 
     // Update reward tier as owner
     start_cheat_caller_address(contract_instance.contract_address, owner);
-    contract_instance.update_reward_tier(1, updated_name, updated_description.clone(), updated_threshold, updated_image_uri.clone());
+    contract_instance
+        .update_reward_tier(
+            1,
+            updated_name,
+            updated_description.clone(),
+            updated_threshold,
+            updated_image_uri.clone(),
+        );
     stop_cheat_caller_address(contract_instance.contract_address);
 
     // Get the updated reward tier
@@ -1843,7 +1829,14 @@ fn test_update_reward_tier_by_admin() {
 
     // Update reward tier as admin
     start_cheat_caller_address(contract_instance.contract_address, admin);
-    contract_instance.update_reward_tier(1, updated_name, updated_description.clone(), updated_threshold, updated_image_uri.clone());
+    contract_instance
+        .update_reward_tier(
+            1,
+            updated_name,
+            updated_description.clone(),
+            updated_threshold,
+            updated_image_uri.clone(),
+        );
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -1876,7 +1869,14 @@ fn test_update_reward_tier_by_random_address() {
 
     // Update reward tier as random
     start_cheat_caller_address(contract_instance.contract_address, random);
-    contract_instance.update_reward_tier(1, updated_name, updated_description.clone(), updated_threshold, updated_image_uri.clone());
+    contract_instance
+        .update_reward_tier(
+            1,
+            updated_name,
+            updated_description.clone(),
+            updated_threshold,
+            updated_image_uri.clone(),
+        );
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -1909,7 +1909,14 @@ fn test_update_reward_tier_events() {
 
     // Update reward tier as owner
     start_cheat_caller_address(contract_instance.contract_address, owner);
-    contract_instance.update_reward_tier(1, updated_name, updated_description.clone(), updated_threshold, updated_image_uri.clone());
+    contract_instance
+        .update_reward_tier(
+            1,
+            updated_name,
+            updated_description.clone(),
+            updated_threshold,
+            updated_image_uri.clone(),
+        );
     stop_cheat_caller_address(contract_instance.contract_address);
 
     // Get the emitted events
@@ -1979,7 +1986,14 @@ fn test_update_reward_tier_when_contract_is_paused() {
 
     // Update reward tier as owner
     start_cheat_caller_address(contract_instance.contract_address, owner);
-    contract_instance.update_reward_tier(1, updated_name, updated_description.clone(), updated_threshold, updated_image_uri.clone());
+    contract_instance
+        .update_reward_tier(
+            1,
+            updated_name,
+            updated_description.clone(),
+            updated_threshold,
+            updated_image_uri.clone(),
+        );
     stop_cheat_caller_address(contract_instance.contract_address);
 }
 
@@ -2058,7 +2072,7 @@ fn test_delete_reward_tier_with_random_address() {
     contract_instance.delete_reward_tier(1);
     stop_cheat_caller_address(contract_instance.contract_address);
 }
-    
+
 // test delete reward tier when contract is paused should panic
 #[test]
 #[should_panic(expected: 'Pausable: paused')]

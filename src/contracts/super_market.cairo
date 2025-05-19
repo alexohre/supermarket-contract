@@ -5,12 +5,13 @@ const PAUSER_ROLE: felt252 = selector!("PAUSER_ROLE");
 const UPGRADER_ROLE: felt252 = selector!("UPGRADER_ROLE");
 const ADMIN_ROLE: felt252 = selector!("ADMIN_ROLE");
 
-// Define the token address as a constant felt252
-const STARKNET_TOKEN_ADDRESS: felt252 =
-    0x04718f5a0fc34cc1af16a1cdee98ffb20c31f5cd61d6ab07201858f4287c938d;
+// Decimal scaling factor for price representation
+// 1000 means prices are stored with 3 decimal places (e.g., 2343 = 2.343)
+const PRICE_SCALING_FACTOR: u32 = 1000;
+
 // starknet token address
 #[starknet::contract]
-pub mod SuperMarketV1 {
+pub mod SuperMarketV0 {
     // Import conversion traits
     use core::traits::Into;
     use openzeppelin::access::accesscontrol::{AccessControlComponent, DEFAULT_ADMIN_ROLE};
@@ -33,7 +34,11 @@ pub mod SuperMarketV1 {
     // import events
     use super_market::events::super_market_event::{
         AdminAdded, AdminRemoved, OwnershipTransferred, ProductCreated, ProductDeleted,
-        ProductPurchased, ProductUpdated, RewardTierAdded, RewardTierDeleted, RewardTierUpdated,
+        ProductPurchased, WithdrawalMade, ProductUpdated, RewardClaimed, RewardTierAdded, RewardTierDeleted,
+        RewardTierUpdated,
+    };
+    use super_market::interfaces::ISuperMarketNft::{
+        ISuperMarketNftDispatcher, ISuperMarketNftDispatcherTrait,
     };
     // import interfaces
     use super_market::interfaces::ISuper_market::ISuperMarket;
@@ -108,12 +113,14 @@ pub mod SuperMarketV1 {
         ProductUpdated: ProductUpdated,
         ProductDeleted: ProductDeleted,
         ProductPurchased: ProductPurchased,
+        WithdrawalMade: WithdrawalMade,
         AdminAdded: AdminAdded,
         AdminRemoved: AdminRemoved,
         OwnershipTransferred: OwnershipTransferred,
         RewardTierAdded: RewardTierAdded,
         RewardTierUpdated: RewardTierUpdated,
         RewardTierDeleted: RewardTierDeleted,
+        RewardClaimed: RewardClaimed,
     }
 
     #[constructor]
@@ -147,30 +154,17 @@ pub mod SuperMarketV1 {
 
     // Internal implementation for contract functions
     trait InternalFunctionsTrait {
-        fn assert_has_admin_role(self: @ContractState, caller: ContractAddress);
-        fn is_owner_or_admin(self: @ContractState, address: ContractAddress) -> bool;
+        fn assert_has_admin_or_owner_role(self: @ContractState, caller: ContractAddress);
         fn _pause(ref self: ContractState);
         fn _unpause(ref self: ContractState);
     }
 
     impl InternalFunctions of InternalFunctionsTrait {
         // Helper function to check if caller has admin role or default admin role
-        fn assert_has_admin_role(self: @ContractState, caller: ContractAddress) {
+        fn assert_has_admin_or_owner_role(self: @ContractState, caller: ContractAddress) {
             let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
             let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
             assert(has_admin_role || has_default_admin_role, 'Not authorized');
-        }
-
-        // Function to check if an address is owner or admin
-        fn is_owner_or_admin(self: @ContractState, address: ContractAddress) -> bool {
-            // Check if address is the owner (has DEFAULT_ADMIN_ROLE)
-            let is_owner = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, address);
-
-            // Check if address has ADMIN_ROLE
-            let is_admin = self.accesscontrol.has_role(ADMIN_ROLE, address);
-
-            // Return true if either condition is met
-            is_owner || is_admin
         }
 
         // Internal function to pause the contract
@@ -354,6 +348,18 @@ pub mod SuperMarketV1 {
 
                 self.emit(Event::AdminRemoved(AdminRemoved { admin }));
             }
+        }
+
+        // Function to check if an address is owner or admin
+        fn is_owner_or_admin(self: @ContractState, address: ContractAddress) -> bool {
+            // Check if address is the owner (has DEFAULT_ADMIN_ROLE)
+            let is_owner = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, address);
+
+            // Check if address has ADMIN_ROLE
+            let is_admin = self.accesscontrol.has_role(ADMIN_ROLE, address);
+
+            // Return true if either condition is met
+            is_owner || is_admin
         }
 
         fn is_admin(self: @ContractState, address: ContractAddress) -> bool {
@@ -611,20 +617,28 @@ pub mod SuperMarketV1 {
 
             // Now handle payment
             let payment_token_address = self.payment_token_address.read();
-            let contract_address = starknet::get_contract_address();
+            let contract_address = get_contract_address();
 
             // Convert u32 to u256 for the ERC20 interface
-            let total_cost_u256: u256 = total_cost.into();
+            // We divide by PRICE_SCALING_FACTOR to get the actual token amount
+            let total_cost_u256: u256 = total_cost.into() / PRICE_SCALING_FACTOR.into();
+
+            // Convert to wei (10^18) for STRK token
+            let total_cost_in_wei: u256 = total_cost_u256 * 1000000000000000000_u256; // 10^18
 
             // Create a dispatcher to interact with the token contract
             let token_dispatcher = IERC20Dispatcher { contract_address: payment_token_address };
 
             // Check if buyer has enough balance
             let buyer_balance = token_dispatcher.balance_of(buyer);
-            assert(buyer_balance >= total_cost_u256, 'INSUFFICIENT_STRK_BALANCE');
+            assert(buyer_balance >= total_cost_in_wei, 'INSUFFICIENT_STRK_BALANCE');
+
+            // Check allowance - buyer must have approved the contract beforehand
+            let allowance = token_dispatcher.allowance(buyer, contract_address);
+            assert(allowance >= total_cost_in_wei, 'INSUFFICIENT_ALLOWANCE');
 
             // Transfer tokens from buyer to contract
-            token_dispatcher.transfer_from(buyer, contract_address, total_cost_u256);
+            token_dispatcher.transfer_from(buyer, contract_address, total_cost_in_wei);
 
             // After payment is confirmed, update stock levels and create order
             let order_id = self.order_count.read() + 1;
@@ -659,7 +673,12 @@ pub mod SuperMarketV1 {
                 // Get product and update stock
 
                 // Store order item
-                let order_item = OrderItem { product_id, quantity, price: product.price };
+                let order_item = OrderItem {
+                    product_id,
+                    product_name: product.name,
+                    quantity,
+                    price: product.price,
+                };
 
                 self.order_items.write((order_id, i), order_item);
 
@@ -706,21 +725,35 @@ pub mod SuperMarketV1 {
             // Check this contract's token balance
             let this_contract: ContractAddress = get_contract_address();
             let balance: u256 = erc20.balance_of(this_contract);
-            assert(balance >= amount, 'INSUFFICIENT_STRK_BALANCE');
+
+            // Convert amount to wei (10^18) for STRK token
+            let amount_in_wei: u256 = amount * 1000000000000000000_u256; // 10^18
+            assert(balance >= amount_in_wei, 'INSUFFICIENT_STRK_BALANCE');
+
+            // Update total sales
+            let current_sales = self.total_sales.read();
+            let requested_amount: u32 = amount_in_wei.try_into().unwrap();
 
             // Transfer tokens to the address
-            erc20.transfer(to, amount);
+            erc20.transfer(to, amount_in_wei);
+
+            // substract amount from total sales
+            self.total_sales.write(current_sales - requested_amount);
+
+            // emit Event
+            self.emit(Event::WithdrawalMade(WithdrawalMade {to: to, amount: requested_amount}));
+
         }
 
         // Get order items for a specific order
         fn get_order_items(self: @ContractState, order_id: u32) -> Array<OrderItem> {
             // Only owner, admins, or the buyer can view order items
-            let caller = get_caller_address();
+            // let caller = get_caller_address();
             let order = self.orders.read(order_id);
 
-            let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
-            let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
-            assert(has_default_admin_role || has_admin_role, 'Unauthorized');
+            // let has_default_admin_role = self.accesscontrol.has_role(DEFAULT_ADMIN_ROLE, caller);
+            // let has_admin_role = self.accesscontrol.has_role(ADMIN_ROLE, caller);
+            // assert(has_default_admin_role || has_admin_role, 'Unauthorized');
 
             let items_count = order.items_count;
             let mut items = ArrayTrait::new();
@@ -815,12 +848,8 @@ pub mod SuperMarketV1 {
             let cloned_image_uri = image_uri.clone();
 
             // Create reward tier and store it
-            let reward_tier = RewardTier { 
-                id: new_id, 
-                name, 
-                description: description, 
-                threshold, 
-                image_uri: image_uri 
+            let reward_tier = RewardTier {
+                id: new_id, name, description: description, threshold, image_uri: image_uri,
             };
             self.reward_tiers.write(new_id, reward_tier);
 
@@ -828,13 +857,18 @@ pub mod SuperMarketV1 {
             self.reward_tier_count.write(new_id);
 
             // Emit event with original ByteArrays
-            self.emit(Event::RewardTierAdded(RewardTierAdded { 
-                id: new_id, 
-                name, 
-                description: cloned_description, 
-                threshold, 
-                image_uri: cloned_image_uri
-            }));
+            self
+                .emit(
+                    Event::RewardTierAdded(
+                        RewardTierAdded {
+                            id: new_id,
+                            name,
+                            description: cloned_description,
+                            threshold,
+                            image_uri: cloned_image_uri,
+                        },
+                    ),
+                );
 
             id
         }
@@ -865,23 +899,22 @@ pub mod SuperMarketV1 {
             let cloned_image_uri = image_uri.clone();
 
             // Update reward tier
-            let updated_reward_tier = RewardTier { 
-                id, 
-                name, 
-                description, 
-                threshold, 
-                image_uri 
-            };
+            let updated_reward_tier = RewardTier { id, name, description, threshold, image_uri };
             self.reward_tiers.write(id, updated_reward_tier);
 
             // Emit event with original ByteArrays
-            self.emit(Event::RewardTierUpdated(RewardTierUpdated { 
-                id, 
-                name, 
-                description: cloned_description, 
-                threshold, 
-                image_uri: cloned_image_uri
-            }));
+            self
+                .emit(
+                    Event::RewardTierUpdated(
+                        RewardTierUpdated {
+                            id,
+                            name,
+                            description: cloned_description,
+                            threshold,
+                            image_uri: cloned_image_uri,
+                        },
+                    ),
+                );
         }
 
         // delete tier by id
@@ -899,7 +932,11 @@ pub mod SuperMarketV1 {
             assert(reward_tier.id == id, 'Reward tier does not exist');
 
             // Delete the reward tier
-            self.reward_tiers.write(id, RewardTier { id: 0, name: 0, description: "", threshold: 0, image_uri: "" });
+            self
+                .reward_tiers
+                .write(
+                    id, RewardTier { id: 0, name: 0, description: "", threshold: 0, image_uri: "" },
+                );
 
             // Emit event
             self.emit(Event::RewardTierDeleted(RewardTierDeleted { id }));
@@ -924,6 +961,35 @@ pub mod SuperMarketV1 {
         fn get_reward_tier_count(self: @ContractState) -> u32 {
             self.reward_tier_count.read()
         }
+        
+        // View function to calculate the token amount needed for a purchase
+        // This helps users know how much to approve before buying
+        fn calculate_token_amount(self: @ContractState, purchases: Array<PurchaseItem>) -> u256 {
+            let mut total_cost: u32 = 0;
+            let purchases_len = purchases.len();
+            let mut i: u32 = 0;
+            
+            while i != purchases_len {
+                let purchase = *purchases.at(i);
+                let product_id = purchase.product_id;
+                let quantity = purchase.quantity;
+                
+                // Get product
+                let product = self.products.read(product_id);
+                if product.id == product_id {
+                    // Calculate cost
+                    let item_cost = product.price * quantity;
+                    total_cost = total_cost + item_cost;
+                }
+                
+                i = i + 1_u32;
+            }
+            
+            // Convert to token amount by dividing by PRICE_SCALING_FACTOR
+            let token_amount: u256 = total_cost.into() / PRICE_SCALING_FACTOR.into();
+            
+            token_amount
+        }
 
         fn get_reward_tier_by_id(self: @ContractState, id: u32) -> Option<RewardTier> {
             let reward_tier = self.reward_tiers.read(id);
@@ -934,7 +1000,7 @@ pub mod SuperMarketV1 {
         }
 
         // Get order by transaction ID
-        fn get_order_by_transaction_id(self: @ContractState, trans_id: felt252) -> Option<Order> {
+        fn get_order_by_trans_id(self: @ContractState, trans_id: felt252) -> Option<Order> {
             let order_count = self.order_count.read();
 
             let mut i: u32 = 1;
@@ -952,7 +1018,7 @@ pub mod SuperMarketV1 {
         // Check if a buyer is eligible for a reward based on transaction ID
         fn check_reward_eligibility(self: @ContractState, trans_id: felt252) -> Option<RewardTier> {
             // Get the order by transaction ID
-            let maybe_order = self.get_order_by_transaction_id(trans_id);
+            let maybe_order = self.get_order_by_trans_id(trans_id);
 
             // If order doesn't exist, return None
             if maybe_order.is_none() {
@@ -1018,18 +1084,59 @@ pub mod SuperMarketV1 {
             let tier_id = eligible_tier.id;
 
             // Get the order
-            let maybe_order = self.get_order_by_transaction_id(trans_id);
+            let maybe_order = self.get_order_by_trans_id(trans_id);
             let order = maybe_order.unwrap();
 
             // Verify the caller is the buyer
             assert(caller == order.buyer, 'Only buyer can claim reward');
 
+            // Check if the buyer has not already claimed the reward
+            let already_claimed = self.claimed_rewards.read((order.buyer, order.id));
+            assert(!already_claimed, 'Reward already claimed');
+
+            // Mint the NFT to the buyer
+            // Get the NFT contract address
+            let nft_contract = self.reward_nft_address.read();
+
+            // Generate a token ID for the NFT
+            // We'll use just the tier_id as the token ID so it matches our metadata files
+            // This means all NFTs of the same tier will have the same metadata
+            // But we'll make it unique by adding a sequential number based on the order ID
+            // let order_id_u256: u256 = order.id.into();
+            let tier_id_u256: u256 = tier_id.into();
+
+            // Create a unique token ID that uses the tier_id directly
+            // This ensures the metadata lookup will work correctly with our files
+            let token_id: u256 = tier_id_u256;
+
+            // Create an empty data span for the safe_mint function
+            let empty_data: Array<felt252> = ArrayTrait::new();
+
+            // Call the NFT contract to mint the token
+            // The NFT contract will use its base URI + token_id to form the full URI
+            // e.g.,
+            // https://coral-chemical-peacock-81.mypinata.cloud/ipfs/bafkreiaxcljlrhvuwmi266erbwgq2uibo7qbegxcyz6vurjygfseupe3iy/0.json
+            let nft_dispatcher = ISuperMarketNftDispatcher { contract_address: nft_contract };
+            nft_dispatcher.safe_mint(order.buyer, token_id, empty_data.span());
+
+            // Get the current timestamp
+            let claimed_at = get_block_timestamp();
+
             // Mark the reward as claimed
             self.claimed_rewards.write((order.buyer, order.id), true);
 
-            // TODO: Mint the NFT to the buyer
-            // This would typically call an external NFT contract
-            // For now, we'll just return the reward tier ID
+            // Emit an event for the claimed reward
+            self
+                .emit(
+                    Event::RewardClaimed(
+                        RewardClaimed {
+                            buyer: order.buyer,
+                            order_id: order.id,
+                            reward_tier_id: tier_id,
+                            claimed_at,
+                        },
+                    ),
+                );
 
             tier_id
         }

@@ -1,5 +1,6 @@
 // inport interfaces
 pub mod interfaces {
+    pub mod ISuperMarketNft;
     pub mod ISuper_market;
 }
 

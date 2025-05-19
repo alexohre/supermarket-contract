@@ -51,6 +51,12 @@ pub struct ProductPurchased {
 }
 
 #[derive(Clone, Drop, Debug, starknet::Event)]
+pub struct WithdrawalMade {
+    pub to: ContractAddress,
+    pub amount: u32,
+}
+
+#[derive(Clone, Drop, Debug, starknet::Event)]
 pub struct RewardClaimed {
     pub buyer: ContractAddress,
     pub order_id: u32,

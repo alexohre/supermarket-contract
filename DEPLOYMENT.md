@@ -92,3 +92,11 @@ If you encounter errors:
 4. Confirm that your class hash is correct
 
 For more detailed information about deployment, visit the [StarkNet documentation](https://docs.starknet.io/documentation/).
+
+## nft contract address
+
+0x03113f6ee7046435587bd94757e2a054c6b770617f9aa35882f625d4ccf75775
+
+## super market contract address
+
+0x0329af544efd8bd9b2e71a2b3b8058403633f4f5ad234d98a2a5ccb81e541fb4

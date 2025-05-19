@@ -33,6 +33,7 @@ pub struct Order {
 #[derive(Clone, Debug, Drop, PartialEq, Serde, starknet::Store)]
 pub struct OrderItem {
     pub product_id: u32,
+    pub product_name: felt252,
     pub quantity: u32,
     pub price: u32,
 }
